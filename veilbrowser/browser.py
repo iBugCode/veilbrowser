@@ -210,10 +210,24 @@ def launch(profile: FingerprintProfile | None = None,
     if profile.proxy:
         _seed_webrtc_prefs(udd)
 
+    js_params = None
+    if engine in ("js", "both"):
+        from .inject import js_params
+        # kernel version from the binary path (DevTools reporting it would be
+        # too late — the --user-agent switch below must be in the first spawn)
+        mver = re.search(r"(\d+\.\d+\.\d+\.\d+)", binary)
+        chrome_full = profile.brand_version or (mver.group(1) if mver else None)
+        js_params = js_params(profile, chrome_full)
+
     flags = [f"--user-data-dir={udd}",
              "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
              "--disable-sync", "--disable-features=Translate"]
     flags += profile.fingerprint_flags(kernel_fp=kernel_fp)
+    if js_params:
+        # Process-wide HTTP User-Agent: CDP's setUserAgentOverride only covers
+        # the attached page session, so worker/subframe fetches would otherwise
+        # leak the real (e.g. HeadlessChrome) UA on the wire.
+        flags.append(f"--user-agent={js_params['userAgent']}")
     flags += list(extra_flags or [])
 
     if os.geteuid() == 0:  # root: sandbox is unsupported
@@ -280,11 +294,6 @@ def launch(profile: FingerprintProfile | None = None,
             kernel_version = mv.group(1)
     except Exception:
         pass
-    js_params = None
-    if engine in ("js", "both"):
-        from .inject import js_params
-        chrome_full = profile.brand_version or kernel_version
-        js_params = js_params(profile, chrome_full)
     b = Browser(profile=profile, binary=binary, proc=proc,
                 devtools=devtools,
                 user_data_dir=flags[0].split("=", 1)[1],

@@ -311,6 +311,39 @@ class TestJsEngineWorkers:
         finally:
             b.stop()
 
+    def test_worker_http_ua_header_matches(self):
+        """--user-agent at launch: worker fetches hit the wire with the
+        spoofed UA (CDP override alone only covers the page session)."""
+        from tests._proxies import TargetSite
+
+        target = TargetSite()
+        try:
+            prof = from_preset("windows-us-office", seed=1001)
+            b = veilbrowser.launch(prof, engine="js",
+                                   extra_flags=["--proxy-bypass-list=<-loopback>"])
+            try:
+                url = f"http://127.0.0.1:{target.port}/probe"
+                page = b.new_page(url)
+                nav_ua = page.evaluate("navigator.userAgent")
+                r = page.evaluate(f"""
+                  new Promise(res => {{
+                    const w = new Worker(URL.createObjectURL(new Blob([`
+                      fetch({url!r}).then(r => r.text())
+                        .then(t => postMessage('ok'))
+                        .catch(e => postMessage('err:' + e.message));
+                    `], {{type: 'application/javascript'}})));
+                    w.onmessage = e => res(e.data);
+                    setTimeout(() => res('timeout'), 5000);
+                  }})
+                """, await_promise=True)
+                assert r == "ok", r
+                assert target.user_agents
+                assert all(ua == nav_ua for ua in target.user_agents)
+            finally:
+                b.stop()
+        finally:
+            target.stop()
+
 
 class TestJsEngineWithProxy:
     BYPASS_LOOPBACK = ["--proxy-bypass-list=<-loopback>"]
