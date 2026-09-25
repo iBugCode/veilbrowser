@@ -887,8 +887,9 @@ _SCRIPT_TEMPLATE = r"""
 
   // ---- storage quota --------------------------------------------------------
   // Ephemeral profiles report tiny quotas that read as private/incognito
-  // (BrowserScan docks 10% for it); report a plausible desktop value.
-  if (cfg.spoof.storage && !isWorker && typeof StorageManager !== 'undefined' &&
+  // (BrowserScan docks 10% for it); report a plausible desktop value. Also
+  // applies in workers: StorageManager exists there and detectors probe it.
+  if (cfg.spoof.storage && typeof StorageManager !== 'undefined' &&
       navigator.storage) {
     const s = cfg.storage;
     redefFn(StorageManager.prototype, 'estimate', markNative(function estimate() {

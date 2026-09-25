@@ -343,6 +343,33 @@ class TestJsEngineWorkers:
         finally:
             b.stop()
 
+    def test_worker_storage_estimate_spoofed(self, make_js_browser):
+        # StorageManager only exists in secure contexts (127.0.0.1 counts),
+        # so this probe runs on a local origin, not the file:// probe page.
+        from tests._proxies import TargetSite
+        prof = _resolved(97)
+        params = js_params(prof)
+        target = TargetSite()
+        b = make_js_browser(prof)
+        try:
+            page = b.new_page(f"http://127.0.0.1:{target.port}/probe")
+            r = page.evaluate("""
+              new Promise(res => {
+                const w = new Worker(URL.createObjectURL(new Blob([`
+                  navigator.storage.estimate()
+                    .then(e => postMessage([e.quota, e.usage]))
+                    .catch(err => postMessage(['err:' + err.message, 0]));
+                `], {type: 'application/javascript'})));
+                w.onmessage = e => res(e.data);
+                setTimeout(() => res(null), 5000);
+              })""", await_promise=True)
+            assert r is not None, "worker never answered"
+            assert r[0] == params["storage"]["quota"]
+            assert r[1] == params["storage"]["usage"]
+        finally:
+            b.stop()
+            target.stop()
+
     def test_worker_identity_preserved(self, make_js_browser):
         b = make_js_browser(from_preset("windows-us-office", seed=1001))
         try:
