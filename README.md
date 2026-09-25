@@ -7,9 +7,11 @@ vanilla ungoogled-chromium 内核上——内核升级只是下载一个新包,�
 一致性思路与 [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) 的
 产品形态)。
 
-核心能力:种子 → **自洽**指纹档位(语言↔时区↔平台↔GPU↔屏幕互相一致)、
-代理密码认证(SOCKS5/HTTP 本地转发)、**HTTP 头与 navigator 强一致**
-(Sec-CH-UA / User-Agent / Accept-Language)、指纹自检、一条命令升级内核。
+核心能力:种子 → **自洽**指纹档位(语言↔时区↔平台↔GPU↔屏幕互相一致,
+GPU 串按平台取真实 ANGLE 格式)、代理密码认证(SOCKS5/HTTP 本地转发)、
+**代理出口 GeoIP 自动对齐**(时区/语言未显式指定时从出口 IP 推导)、
+**HTTP 头与 navigator 强一致**(Sec-CH-UA / User-Agent / Accept-Language)、
+音频采样率/延迟、speech voices、Battery、指纹自检、一条命令升级内核。
 
 ## 架构
 
@@ -20,6 +22,7 @@ vanilla ungoogled-chromium 内核上——内核升级只是下载一个新包,�
 │  inject.py   ★指纹引擎:JS bundle + CDP UA 覆写         │
 │  browser.py  启动器(DevTools/清理/WebRTC 预置)         │
 │  proxy.py    本地认证转发器(SOCKS5/HTTP,上游侧 DNS)    │
+│  geo.py      代理出口 GeoIP 对齐(时区/语言推导)         │
 │  cdp.py      最小 CDP 客户端                           │
 │  probe.py    指纹自检(12 项)                        │
 │  upgrade.py  一条命令升级内核(sha256 校验)             │
@@ -36,7 +39,7 @@ vanilla ungoogled-chromium 内核上——内核升级只是下载一个新包,�
 | engine | 指纹实现 | 内核要求 | 适用 |
 |--------|----------|----------|------|
 | `js`(默认) | inject.py 注入 bundle + CDP `Network.setUserAgentOverride` | 任何 vanilla Chromium | 跟随最新内核 |
-| `kernel` | fingerprint-chromium C++ 补丁 | fingerprint-chromium | 需要 C++ 级噪声 |
+| `kernel` | fingerprint-chromium C++ 补丁(`js_overlay=True` 可叠加 canvas 段) | fingerprint-chromium | 需要 C++ 级噪声 |
 | `both` | 内核补丁 + JS 叠加 | fingerprint-chromium | 最大覆盖 |
 
 JS 引擎覆盖:navigator(UA/platform/UA-CH/brands/webdriver/deviceMemory/
@@ -44,8 +47,10 @@ hardwareConcurrency/languages/plugins)、时区全套(`Date` 构造器/本地 ge
 `toString`/`Intl.DateTimeFormat`)、canvas(getImageData/toDataURL/toBlob/
 measureText 加噪,**纯文本 canvas 也加噪**——内核补丁的已知缺口)、client
 rects 微扰、audio 渲染加扰、WebGL vendor/renderer、屏幕指标一致性、
-mediaDevices 枚举;HTTP 层由 CDP 覆写保证 `User-Agent`/`Sec-CH-UA*`/
-`Accept-Language` 与页面内完全一致。
+mediaDevices 枚举、AudioContext 采样率/延迟(显式构造参数保持)、
+speechSynthesis 按平台+语言的声音池、Battery API 完整合成(ungoogled
+内核移除了它——对自称 Chrome 的指纹,"API 缺失"本身就是特征);HTTP 层由
+CDP 覆写保证 `User-Agent`/`Sec-CH-UA*`/`Accept-Language` 与页面内完全一致。
 
 ## 快速开始
 
@@ -101,21 +106,24 @@ UA↔platform↔UA-CH↔HTTP 头四面一致。种子是 32 位整数,同一 see
 ## 测试
 
 ```bash
-python -m pytest tests/ -q     # 75 项:单元 + 148 内核集成 + 153 vanilla JS 引擎 + E2E 代理链 + worker 作用域
+python -m pytest tests/ -q     # 89 项:单元 + 148 内核集成 + 153 vanilla JS 引擎 + E2E 代理链 + worker 作用域 + GeoIP
 ```
 
 覆盖:两套内核上的身份一致性、UA-CH、canvas 种子噪声与确定性、audio 种子
 依赖、clientrects 抖动、webgl 字符串、时区(含 `Date` 本地语义)、插件形状、
 getter 原生伪装(toString 检测)、iframe 注入覆盖、**HTTP 头与 navigator
 一致性**(真实靶站捕获 Sec-CH-UA*)、屏幕指标、WebRTC 预置、代理全链认证、
-**worker 作用域伪装**(DedicatedWorker UA/时区/webdriver/GPU)。
+**worker 作用域伪装**(DedicatedWorker UA/时区/webdriver/GPU)、
+**GeoIP 对齐**(假代理链 E2E:出口 IP → Asia/Tokyo/ja-JP)、
+**kernel+js_overlay**(纯文本 canvas 加噪且内核身份不变)。
 
-## 公开检测工具实测(v0.3.0 验收)
+## 公开检测工具实测(v0.3.0 验收,v0.4.0 复验)
 
 - **bot.sannysoft.com:57/57 全部通过**(含 WebDriver New、Headless 检测组)。
-- **CreepJS:0 个控制台错误、无 lie 标记**;DedicatedWorker 与 ServiceWorker
-  作用域的 UA/UA-CH/平台/时区/GPU 全部与页面自洽(置信度 high);
-  字体面不再暴露宿主 Linux 字体集(DejaVu 系列)。
+- **CreepJS:0 个控制台错误、0 个异常、无 lie 标记**;DedicatedWorker 与
+  ServiceWorker 作用域的 UA/UA-CH/平台/时区/GPU 全部与页面自洽(置信度 high);
+  字体面不再暴露宿主 Linux 字体集(DejaVu 系列);Battery 与 speech voices
+  区块按种子档位连贯渲染(v0.4.0 新增面复验无回归)。
 - Canvas 噪声会被 CreepJS 标注 "rgba noise" —— 这是噪声类伪装的固有代价
   (fingerprint-chromium 同理),换来的是跨实例不可关联。
 
@@ -124,7 +132,10 @@ getter 原生伪装(toString 检测)、iframe 注入覆盖、**HTTP 头与 navig
 已吸收 Camoufox/CloakBrowser 的:统计真实感档位池、每实例种子化差异、
 HTTP 头一致性、WebRTC IP 策略、mediaDevices 枚举、geo 一致性、
 **worker/SW 作用域注入**(浏览器级 auto-attach + Worker 构造器包装)、
-**字体白名单**(measureText 族替换 + fonts.check + FontFace local() 拦截)。
+**字体白名单**(measureText 族替换 + fonts.check + FontFace local() 拦截)、
+**代理出口 GeoIP 自动对齐**(经同一条代理链查询,显式指定优先,失败兜底)、
+**每平台 GPU 串**(Windows D3D11 / macOS Metal / Linux Mesa,与平台联动)、
+**音频采样率/延迟 + speech voices + Battery**。
 **尚未吸收(诚实清单)**:
 
 - C++ 层拦截:JS hook 可被 `toString`/descriptor 深检识别(我们已做原生
@@ -132,15 +143,16 @@ HTTP 头一致性、WebRTC IP 策略、mediaDevices 枚举、geo 一致性、
   rebase 到新内核自编译。
 - 真实字体度量:白名单外的字体族测量为"未安装",但白名单内字体在宿主上
   无对应字形文件,宽度来自回退字体(Camoufox 捆绑字体包+字距偏移)。
-- 代理出口 GeoIP 自动对齐(当前需显式指定时区/语言;Camoufox 从代理 IP
-  自动推导)。
-- 音频采样率/输出延迟、speech voices、Battery API 伪装。
+- C++ 级音频/字体伪装(当前 JS hook 已做原生 toString 伪装,但非 C++ 级
+  不可检测)。
+- 真实字体度量:白名单外的字体族测量为"未安装",但白名单内字体在宿主上
+  无对应字形文件,宽度来自回退字体(Camoufox 捆绑字体包+字距偏移)。
 - 行为层:人类化鼠标轨迹(Camoufox Cursory)、输入节奏随机化——静态指纹
   对抗成熟后的新主战场。
 
-已知内核层面差距(仅 `engine="kernel"`):纯文本 canvas 不加噪(JS 引擎
-无此问题)、GPU 档位与 UA 平台不联动。SOCKS5 UDP ASSOCIATE 按 RFC 拒绝,
-Chromium 回落 TCP。
+已知残余:`engine="kernel"` 纯模式(不开 `js_overlay`)的纯文本 canvas 仍
+不加噪;GPU 档位与平台联动在 kernel 模式由 fingerprint-chromium 决定。
+SOCKS5 UDP ASSOCIATE 按 RFC 拒绝,Chromium 回落 TCP。
 
 ## 许可
 
