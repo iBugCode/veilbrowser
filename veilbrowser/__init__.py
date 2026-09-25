@@ -19,7 +19,7 @@ from .profile import FingerprintProfile, PRESETS, from_preset
 from .probe import check, collect, print_report
 from .upgrade import latest_release, upgrade as upgrade_kernel
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "Browser", "CDP", "CDPError", "DevTools", "FingerprintProfile", "PRESETS",

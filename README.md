@@ -101,24 +101,37 @@ UA↔platform↔UA-CH↔HTTP 头四面一致。种子是 32 位整数,同一 see
 ## 测试
 
 ```bash
-python -m pytest tests/ -q     # 70 项:单元 + 148 内核集成 + 153 vanilla JS 引擎 + E2E 代理链
+python -m pytest tests/ -q     # 75 项:单元 + 148 内核集成 + 153 vanilla JS 引擎 + E2E 代理链 + worker 作用域
 ```
 
 覆盖:两套内核上的身份一致性、UA-CH、canvas 种子噪声与确定性、audio 种子
 依赖、clientrects 抖动、webgl 字符串、时区(含 `Date` 本地语义)、插件形状、
 getter 原生伪装(toString 检测)、iframe 注入覆盖、**HTTP 头与 navigator
-一致性**(真实靶站捕获 Sec-CH-UA*)、屏幕指标、WebRTC 预置、代理全链认证。
+一致性**(真实靶站捕获 Sec-CH-UA*)、屏幕指标、WebRTC 预置、代理全链认证、
+**worker 作用域伪装**(DedicatedWorker UA/时区/webdriver/GPU)。
+
+## 公开检测工具实测(v0.3.0 验收)
+
+- **bot.sannysoft.com:57/57 全部通过**(含 WebDriver New、Headless 检测组)。
+- **CreepJS:0 个控制台错误、无 lie 标记**;DedicatedWorker 与 ServiceWorker
+  作用域的 UA/UA-CH/平台/时区/GPU 全部与页面自洽(置信度 high);
+  字体面不再暴露宿主 Linux 字体集(DejaVu 系列)。
+- Canvas 噪声会被 CreepJS 标注 "rgba noise" —— 这是噪声类伪装的固有代价
+  (fingerprint-chromium 同理),换来的是跨实例不可关联。
 
 ## 对标与路线图
 
 已吸收 Camoufox/CloakBrowser 的:统计真实感档位池、每实例种子化差异、
-HTTP 头一致性、WebRTC IP 策略、mediaDevices 枚举、geo 一致性。
+HTTP 头一致性、WebRTC IP 策略、mediaDevices 枚举、geo 一致性、
+**worker/SW 作用域注入**(浏览器级 auto-attach + Worker 构造器包装)、
+**字体白名单**(measureText 族替换 + fonts.check + FontFace local() 拦截)。
 **尚未吸收(诚实清单)**:
 
 - C++ 层拦截:JS hook 可被 `toString`/descriptor 深检识别(我们已做原生
   伪装,但非 C++ 级不可检测);路径:基于 `kernel-patches/` 的 144 基线
   rebase 到新内核自编译。
-- 字体面指纹:未做字体列表伪装(Camoufox 用系统字体包+字距偏移解决)。
+- 真实字体度量:白名单外的字体族测量为"未安装",但白名单内字体在宿主上
+  无对应字形文件,宽度来自回退字体(Camoufox 捆绑字体包+字距偏移)。
 - 代理出口 GeoIP 自动对齐(当前需显式指定时区/语言;Camoufox 从代理 IP
   自动推导)。
 - 音频采样率/输出延迟、speech voices、Battery API 伪装。
