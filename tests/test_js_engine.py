@@ -181,6 +181,22 @@ class TestJsEngineNoise:
         c, page2 = js_probe_page(_resolved(62))
         assert page.evaluate(self.CANVAS_JS) != page2.evaluate(self.CANVAS_JS)
 
+    def test_textmetrics_brand_check_survives(self, js_probe_page):
+        """measureText noise must not break the TextMetrics brand check:
+        reading actualBoundingBox* off the returned object used to throw
+        'Illegal invocation' (creepjs's canvas 'blocked')."""
+        b, page = js_probe_page(_resolved(61))
+        r = page.evaluate("""
+          (() => {
+            const ctx = document.createElement('canvas').getContext('2d');
+            ctx.font = '10px Arial';
+            const m = ctx.measureText('\\ud83d\\ude00 hello');
+            return [m.width % 1 !== 0, m.actualBoundingBoxAscent !== undefined,
+                    m.fontBoundingBoxDescent !== undefined];
+          })()
+        """)
+        assert r == [True, True, True]
+
     def test_canvas_noised_vs_vanilla_control(self, js_probe_page, vanilla_path):
         """Even a text-only canvas must differ from the unpatched baseline —
         this is the gap fingerprint-chromium's kernel leaves open."""

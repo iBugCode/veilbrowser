@@ -497,7 +497,12 @@ _SCRIPT_TEMPLATE = r"""
     CanvasRenderingContext2D.prototype.measureText = markNative(function measureText(text) {
       const m = origMeasure.call(this, text);
       const eps = ((hash32(String(text), cfg.seed) % 1000) - 500) / 50000;  // +-0.01px
-      return Object.create(m, {width: {value: m.width + eps, enumerable: true}});
+      // Own-property override on the real TextMetrics — an Object.create()
+      // wrapper would fail the WebIDL brand check when callers read
+      // actualBoundingBox*/fontBoundingBox* (creepjs does exactly that).
+      try { Object.defineProperty(m, 'width',
+        {value: m.width + eps, enumerable: true, configurable: true}); } catch (e) {}
+      return m;
     }, 'measureText');
   }
 
