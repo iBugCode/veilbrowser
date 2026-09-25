@@ -196,16 +196,11 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
     sw, sh = r_scr.choice(_SCREENS[resolved.platform])
     taskbar = r_scr.choice((40, 48, 60, 72)) if resolved.platform == "windows" \
         else r_scr.choice((24, 25, 38))
-    # Maximized-window story coherent with the fingerprint screen: JS-visible
-    # window metrics never show the host's real window — that stays available
-    # to the operator via screen.__width/__height (CloakBrowser-style).
-    ui_h = r_scr.choice((79, 87, 95, 108, 124))
-    side = 8 if resolved.platform == "windows" else 0
+    # Screen follows the fingerprint; window metrics stay real (media queries
+    # read the true viewport). The real host window size reaches the operator
+    # via screen.__width/__height — CloakBrowser-style.
     screen = {"w": sw, "h": sh, "availW": sw, "availH": sh - taskbar,
-              "cd": r_scr.choice((24, 30)), "pd": 24,
-              "innerW": sw, "innerH": sh - taskbar - ui_h,
-              "outerW": sw + 2 * side, "outerH": sh - taskbar + side,
-              "scrX": -side, "scrY": -side,
+              "cd": r_scr.choice((24, 30)),
               "dpr": 2 if resolved.platform == "macos" else 1}
 
     r_dev = rng("devices")
@@ -1152,17 +1147,13 @@ _SCRIPT_TEMPLATE = r"""
     ['colorDepth', 'pixelDepth'].forEach(p => {
       redefine(scr, p, () => s.cd); redefine(scrProto, p, () => s.cd);
     });
-    redefine(window, 'outerWidth', () => s.outerW);
-    redefine(window, 'outerHeight', () => s.outerH);
-    redefine(window, 'innerWidth', () => s.innerW);
-    redefine(window, 'innerHeight', () => s.innerH);
-    redefine(window, 'devicePixelRatio', () => s.dpr);
-    ['screenX', 'screenLeft'].forEach(p => redefine(window, p, () => s.scrX));
-    ['screenY', 'screenTop'].forEach(p => redefine(window, p, () => s.scrY));
-    if (window.visualViewport) {
-      const vv = window.visualViewport;
-      redefine(vv, 'width', () => s.innerW);
-      redefine(vv, 'height', () => s.innerH);
+    // Window metrics (inner/outer/screenX-Y/visualViewport) stay REAL: CSS
+    // media queries read the true layout viewport, so claiming a spoofed
+    // innerWidth trips matchMedia cross-checks (bot.sannysoft MQ_SCREEN).
+    // A fingerprint screen with a non-maximized window is ordinary; the real
+    // window size is available above via screen.__width/__height.
+    if (s.dpr !== window.devicePixelRatio) {
+      redefine(window, 'devicePixelRatio', () => s.dpr);
     }
   }
 
