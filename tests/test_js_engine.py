@@ -257,6 +257,61 @@ class TestJsEngineFrames:
         assert "Windows NT 10.0" in ua
 
 
+class TestJsEngineWorkers:
+    """addScriptToEvaluateOnNewDocument never reaches worker scopes; the
+    Worker-constructor wrapper must carry the bundle into dedicated workers
+    (creepjs's loudest leak: real HeadlessChrome UA + UTC in worker scope)."""
+
+    _WORKER_PROBE = """
+      new Promise(res => {
+        const w = new Worker(URL.createObjectURL(new Blob([`
+          postMessage([
+            navigator.userAgent,
+            navigator.platform,
+            navigator.webdriver,
+            new Date().getTimezoneOffset(),
+            navigator.userAgentData ? navigator.userAgentData.platform : null,
+            (() => { try {
+              return new OffscreenCanvas(1, 1).getContext('webgl').getParameter(0x9246);
+            } catch (e) { return null; } })(),
+          ]);
+        `], {type: 'application/javascript'})));
+        w.onmessage = e => res(e.data);
+        setTimeout(() => res(null), 5000);
+      })
+    """
+
+    def test_worker_scope_spoofed(self, make_js_browser):
+        prof = _resolved(91, platform="windows", timezone="America/New_York",
+                         language="en-US")
+        params = js_params(prof)
+        b = make_js_browser(prof)
+        try:
+            page = b.new_page()
+            r = page.evaluate(self._WORKER_PROBE, await_promise=True)
+            assert r is not None, "worker never answered"
+            ua, plat, webdriver, tzoff, uach, gpu = r
+            assert ua == params["userAgent"]
+            assert plat == params["navPlatform"]
+            assert not webdriver
+            py_off = datetime.now(
+                ZoneInfo(params["timezone"])).utcoffset().total_seconds() / 60
+            assert tzoff == -py_off
+            assert uach == params["uachPlatform"]
+            assert gpu == params["webglRenderer"]
+        finally:
+            b.stop()
+
+    def test_worker_identity_preserved(self, make_js_browser):
+        b = make_js_browser(from_preset("windows-us-office", seed=1001))
+        try:
+            page = b.new_page()
+            assert page.evaluate(
+                "new Worker('data:,postMessage(1)').constructor.name") == "Worker"
+        finally:
+            b.stop()
+
+
 class TestJsEngineWithProxy:
     BYPASS_LOOPBACK = ["--proxy-bypass-list=<-loopback>"]
 

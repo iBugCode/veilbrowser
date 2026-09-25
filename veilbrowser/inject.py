@@ -158,7 +158,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
         "spoof": {
             "ua": True, "tz": True, "canvas": True, "rects": True,
             "audio": True, "webgl": True, "plugins": True, "shadow": True,
-            "screen": True, "media": True,
+            "screen": True, "media": True, "worker": True,
         },
         "automation": True,
     }
@@ -177,9 +177,11 @@ def _tz_display_name(tz: str) -> str:
 
 _SCRIPT_TEMPLATE = r"""
 (() => {
+  const scope = typeof window !== 'undefined' ? window : self;
+  const isWorker = typeof window === 'undefined';
   const cfg = __VEIL_CFG__;
-  if (!cfg || window.__veil_installed) return;
-  try { Object.defineProperty(window, '__veil_installed', {value: true, enumerable: false}); } catch (e) {}
+  if (!cfg || scope.__veil_installed) return;
+  try { Object.defineProperty(scope, '__veil_installed', {value: true, enumerable: false}); } catch (e) {}
 
   // ---- helpers -----------------------------------------------------------
   function hash32(str, seed) {
@@ -226,7 +228,8 @@ _SCRIPT_TEMPLATE = r"""
 
   // ---- navigator ---------------------------------------------------------
   if (cfg.spoof.ua) {
-    const proto = Navigator.prototype;
+    // window: Navigator.prototype — worker: WorkerNavigator.prototype
+    const proto = Object.getPrototypeOf(navigator);
     redefine(navigator, 'userAgent', () => cfg.userAgent);
     redefine(proto, 'userAgent', () => cfg.userAgent);
     redefine(navigator, 'appVersion', () => cfg.userAgent.replace(/^Mozilla\//, ''));
@@ -273,7 +276,7 @@ _SCRIPT_TEMPLATE = r"""
     redefine(navigator, 'userAgentData', () => uaData);
     redefine(proto, 'userAgentData', () => uaData);
 
-    if (cfg.spoof.plugins) {
+    if (cfg.spoof.plugins && typeof PluginArray !== 'undefined') {
       const mimes = [
         {type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format'},
         {type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format'},
@@ -420,12 +423,12 @@ _SCRIPT_TEMPLATE = r"""
     VeilDate.prototype = RealDate.prototype;
     VeilDate.now = RealDate.now; VeilDate.parse = RealDate.parse; VeilDate.UTC = RealDate.UTC;
     markNative(VeilDate, 'Date');
-    try { Object.defineProperty(window, 'Date',
+    try { Object.defineProperty(scope, 'Date',
       {value: VeilDate, writable: true, configurable: true}); } catch (e) {}
   }
 
-  // ---- canvas ------------------------------------------------------------
-  if (cfg.spoof.canvas) {
+  // ---- canvas (main thread only: needs document.createElement) -----------
+  if (cfg.spoof.canvas && !isWorker) {
     function noiseBytes(seed, w, h, len) {
       const r = prng(hash32(w + 'x' + h, seed));
       const mask = new Uint8Array(Math.min(len, 512));
@@ -498,8 +501,8 @@ _SCRIPT_TEMPLATE = r"""
     }, 'measureText');
   }
 
-  // ---- client rects ------------------------------------------------------
-  if (cfg.spoof.rects) {
+  // ---- client rects (main thread only) -----------------------------------
+  if (cfg.spoof.rects && !isWorker) {
     function adjust(rect, el) {
       const key = [rect.left, rect.top, rect.width, rect.height,
                    el && el.tagName || ''].join(',');
@@ -528,7 +531,7 @@ _SCRIPT_TEMPLATE = r"""
   }
 
   // ---- audio -------------------------------------------------------------
-  if (cfg.spoof.audio) {
+  if (cfg.spoof.audio && typeof OfflineAudioContext !== 'undefined') {
     function jitterBuffer(buf, ctx) {
       const out = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
       for (let c = 0; c < buf.numberOfChannels; c++) {
@@ -555,7 +558,8 @@ _SCRIPT_TEMPLATE = r"""
   if (cfg.spoof.webgl) {
     const VENDOR = 0x1F00, RENDERER = 0x1F01, VERSION = 0x1F02;
     const UNMASKED_VENDOR = 0x9245, UNMASKED_RENDERER = 0x9246;
-    [window.WebGLRenderingContext, window.WebGL2RenderingContext].forEach(Ctor => {
+    [typeof WebGLRenderingContext !== 'undefined' && WebGLRenderingContext,
+     typeof WebGL2RenderingContext !== 'undefined' && WebGL2RenderingContext].forEach(Ctor => {
       if (!Ctor) return;
       const origGP = Ctor.prototype.getParameter;
       Ctor.prototype.getParameter = markNative(function getParameter(p) {
@@ -579,8 +583,8 @@ _SCRIPT_TEMPLATE = r"""
     });
   }
 
-  // ---- screen & window metrics ------------------------------------------
-  if (cfg.spoof.screen) {
+  // ---- screen & window metrics (main thread only) ------------------------
+  if (cfg.spoof.screen && !isWorker) {
     const s = cfg.screen;
     const scr = window.screen, scrProto = Screen.prototype;
     ['width', 'availWidth'].forEach(p => {
@@ -607,8 +611,8 @@ _SCRIPT_TEMPLATE = r"""
     }, 'enumerateDevices');
   }
 
-  // ---- automation conveniences ------------------------------------------
-  if (cfg.automation && cfg.spoof.shadow) {
+  // ---- automation conveniences (main thread only) ------------------------
+  if (cfg.automation && cfg.spoof.shadow && !isWorker) {
     const origAttach = Element.prototype.attachShadow;
     Element.prototype.attachShadow = markNative(function attachShadow(init) {
       const root = origAttach.call(this, init);
@@ -617,13 +621,60 @@ _SCRIPT_TEMPLATE = r"""
       return root;
     }, 'attachShadow');
   }
+
+  // ---- dedicated worker scope --------------------------------------------
+  // addScriptToEvaluateOnNewDocument never runs inside workers, so wrap the
+  // Worker constructor and prepend the same bundle to every classic worker
+  // script. blob: URLs are read synchronously (XHR) so pages that revoke the
+  // object URL right after construction keep working; http(s) scripts are
+  // reached through importScripts.
+  if (!isWorker && cfg.spoof.worker && cfg.workerBundle) {
+    const RealWorker = Worker;
+    function VeilWorker(scriptURL, options) {
+      const opts = options || {};
+      let url = scriptURL;
+      if ((opts.type || 'classic') !== 'module') {
+        try {
+          const abs = new URL(String(scriptURL), document.baseURI).href;
+          if (abs.startsWith('blob:')) {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', abs, false);
+            xhr.send();
+            const src = cfg.workerBundle + '\n;' + (xhr.responseText || '');
+            url = URL.createObjectURL(new Blob([src], {type: 'application/javascript'}));
+          } else if (/^https?:/.test(abs)) {
+            const src = cfg.workerBundle + '\n;importScripts(' + JSON.stringify(abs) + ');';
+            url = URL.createObjectURL(new Blob([src], {type: 'application/javascript'}));
+          }
+        } catch (e) { url = scriptURL; }
+      }
+      return new RealWorker(url, opts);
+    }
+    VeilWorker.prototype = RealWorker.prototype;
+    markNative(VeilWorker, 'Worker');
+    try {
+      Object.defineProperty(scope, 'Worker',
+        {value: VeilWorker, writable: true, configurable: true});
+      Object.defineProperty(RealWorker.prototype, 'constructor',
+        {value: VeilWorker, writable: true, configurable: true});
+    } catch (e) {}
+  }
 })();
 """
 
 
 def build_script(params: dict) -> str:
-    """Render the injection bundle with the profile parameters embedded."""
-    cfg = json.dumps(params, separators=(",", ":"), sort_keys=True)
+    """Render the injection bundle with the profile parameters embedded.
+
+    The rendered bundle is embedded a second time (``workerBundle``) so the
+    page-level copy can prepend it to dedicated worker scripts — CDP's
+    addScriptToEvaluateOnNewDocument does not reach worker scopes.
+    """
+    base = dict(params)
+    worker_bundle = _SCRIPT_TEMPLATE.replace(
+        "__VEIL_CFG__", json.dumps(base, separators=(",", ":"), sort_keys=True))
+    cfg = json.dumps(dict(base, workerBundle=worker_bundle),
+                     separators=(",", ":"), sort_keys=True)
     return _SCRIPT_TEMPLATE.replace("__VEIL_CFG__", cfg)
 
 
