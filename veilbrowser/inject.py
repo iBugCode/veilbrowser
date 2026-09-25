@@ -123,6 +123,32 @@ _PLATFORM_VERSIONS = {
     "linux": ("6.1.0", "6.12.0", "5.15.0"),
 }
 
+# GPU strings are ANGLE-serialized and the format differs per OS: Windows
+# reports Direct3D11, macOS the Metal renderer, Linux Mesa/OpenGL — a Mesa
+# string next to a Win32 navigator.platform is an immediate contradiction.
+_GPU_POOLS: dict[str, tuple[tuple[str, str], ...]] = {
+    "windows": (
+        ("Google Inc. (Intel)", "ANGLE (Intel, Intel(R) UHD Graphics 620 (0x00003EA0) Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+        ("Google Inc. (Intel)", "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+        ("Google Inc. (NVIDIA)", "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002503) Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+        ("Google Inc. (NVIDIA)", "ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 (0x00001F82) Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+        ("Google Inc. (AMD)", "ANGLE (AMD, AMD Radeon(TM) Graphics (0x0000164E) Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+    ),
+    "macos": (
+        ("Google Inc. (Apple)", "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"),
+        ("Google Inc. (Apple)", "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"),
+        ("Google Inc. (Apple)", "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)"),
+        ("Google Inc. (Apple)", "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)"),
+        ("Google Inc. (Apple)", "ANGLE (Apple, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 655, Unspecified Version)"),
+    ),
+    "linux": (
+        ("Google Inc. (Intel)", "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL 4.6)"),
+        ("Google Inc. (Intel)", "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2), OpenGL 4.6)"),
+        ("Google Inc. (AMD)", "ANGLE (AMD, Mesa Radeon(R) Graphics (Renoir), OpenGL 4.6)"),
+        ("Google Inc. (NVIDIA)", "ANGLE (NVIDIA, Mesa NVIDIA RTX 3060/PCIe/SSE2, OpenGL 4.6)"),
+    ),
+}
+
 _SCREENS = {
     "windows": ((1920, 1080), (2560, 1440), (1366, 768), (1680, 1050), (3840, 2160)),
     "macos": ((1440, 900), (1536, 960), (1680, 1050), (1710, 1112)),
@@ -164,12 +190,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
     full_list = [{"brand": f"{brand_name};{major}", "version": chrome_full}]
 
     r_gl = rng("webgl")
-    gpu = r_gl.choice([
-        ("Google Inc. (Intel)", "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL 4.6)"),
-        ("Google Inc. (Intel)", "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2), OpenGL 4.6)"),
-        ("Google Inc. (AMD)", "ANGLE (AMD, Mesa Radeon(R) Graphics (Renoir), OpenGL 4.6)"),
-        ("Google Inc. (NVIDIA)", "ANGLE (NVIDIA, Mesa NVIDIA RTX 3060/PCIe/SSE2, OpenGL 4.6)"),
-    ])
+    gpu = r_gl.choice(_GPU_POOLS[resolved.platform])
 
     r_scr = rng("screen")
     sw, sh = r_scr.choice(_SCREENS[resolved.platform])

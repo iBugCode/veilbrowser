@@ -532,6 +532,20 @@ class TestJsEngineCoherence:
                 for s in range(1, 25)}
         assert len(bats) >= 3  # not every instance carries the same charge
 
+    def test_gpu_pool_matches_platform_format(self):
+        # Windows reports D3D11, macOS the Metal renderer, Linux Mesa/OpenGL;
+        # a Mesa string next to Win32 is an immediate contradiction.
+        for platform, marker in (("windows", "Direct3D11"),
+                                 ("macos", "ANGLE Metal Renderer: Apple"),
+                                 ("linux", "OpenGL 4.6")):
+            for s in (3, 42, 77):
+                params = js_params(_resolved(s, platform=platform), "153.0.8010.52")
+                assert marker in params["webglRenderer"]
+                if platform == "macos":
+                    assert params["webglVendor"] == "Google Inc. (Apple)"
+                else:
+                    assert params["webglVendor"].startswith("Google Inc. (")
+
     def test_webrtc_prefs_seeded_with_proxy(self, make_js_browser):
         import json
         import os
