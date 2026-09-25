@@ -228,6 +228,10 @@ def launch(profile: FingerprintProfile | None = None,
         # the attached page session, so worker/subframe fetches would otherwise
         # leak the real (e.g. HeadlessChrome) UA on the wire.
         flags.append(f"--user-agent={js_params['userAgent']}")
+        # Vanilla Chromium honours --timezone process-wide (service workers
+        # included) — our JS tz hook only reaches window scopes.
+        if profile.timezone:
+            flags.append(f"--timezone={profile.timezone}")
     flags += list(extra_flags or [])
 
     if os.geteuid() == 0:  # root: sandbox is unsupported
