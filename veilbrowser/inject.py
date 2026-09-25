@@ -265,9 +265,10 @@ _SCRIPT_TEMPLATE = r"""
     redefine(proto, 'appVersion', () => cfg.userAgent.replace(/^Mozilla\//, ''));
     redefine(navigator, 'platform', () => cfg.navPlatform);
     redefine(proto, 'platform', () => cfg.navPlatform);
-    delete navigator.webdriver;
-    redefine(navigator, 'webdriver', () => undefined);
-    redefine(proto, 'webdriver', () => undefined);
+    // real-Chrome shape: webdriver is a prototype accessor returning false,
+    // NOT an own property — own-key probes (lodash _.has) flag the instance
+    // property even when its value is undefined.
+    redefine(proto, 'webdriver', () => false);
     redefine(navigator, 'hardwareConcurrency', () => cfg.hardwareConcurrency);
     redefine(proto, 'hardwareConcurrency', () => cfg.hardwareConcurrency);
     redefine(navigator, 'deviceMemory', () => cfg.deviceMemory);
