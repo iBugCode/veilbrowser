@@ -59,6 +59,46 @@ _GENERIC_FAMILIES = (
     "ui-serif", "ui-sans-serif", "ui-monospace", "math", "fangsong", "emoji",
 )
 
+# Platform-plausible speechSynthesis voices. Chrome adds its own "Google …"
+# network voices on every OS; the others follow what the OS ships. A voice
+# matching the profile language is appended so de-DE sessions don't speak
+# with an English-only voice set.
+_VOICE_BASES: dict[str, tuple[tuple[str, str, bool], ...]] = {
+    "windows": (
+        ("Microsoft David - English (United States)", "en-US", True),
+        ("Microsoft Zira - English (United States)", "en-US", True),
+        ("Microsoft Sonia - English (United Kingdom)", "en-GB", False),
+        ("Google US English", "en-US", False),
+    ),
+    "macos": (
+        ("Samantha", "en-US", True),
+        ("Alex", "en-US", True),
+        ("Karen", "en-AU", False),
+        ("Daniel", "en-GB", False),
+        ("Moira", "en-IE", False),
+        ("Tessa", "en-ZA", False),
+        ("Google US English", "en-US", False),
+    ),
+    "linux": (
+        ("eSpeak NG English (Great Britain)", "en-GB", True),
+        ("eSpeak NG English (United States)", "en-US", True),
+    ),
+}
+
+_VOICE_LANG_MATCHES: dict[str, tuple[str, str, bool]] = {
+    "zh-CN": ("Microsoft Huihui - Chinese (Simplified, PRC)", "zh-CN", True),
+    "zh-TW": ("Microsoft Hanhan - Chinese (Traditional, Taiwan)", "zh-TW", True),
+    "ja-JP": ("Microsoft Haruka - Japanese (Japan)", "ja-JP", True),
+    "ko-KR": ("Microsoft Heami - Korean (Korea)", "ko-KR", True),
+    "de-DE": ("Microsoft Hedda - German (Germany)", "de-DE", True),
+    "fr-FR": ("Microsoft Hortense - French (France)", "fr-FR", True),
+    "es-ES": ("Microsoft Helena - Spanish (Spain)", "es-ES", True),
+    "it-IT": ("Microsoft Elsa - Italian (Italy)", "it-IT", True),
+    "ru-RU": ("Microsoft Irina - Russian (Russia)", "ru-RU", True),
+    "pt-BR": ("Microsoft Maria - Portuguese (Brazil)", "pt-BR", True),
+    "en-IN": ("Microsoft Heera - English (India)", "en-IN", True),
+}
+
 
 def _ua_strings(platform: str, chrome_full: str, brand: str) -> tuple[str, str, str]:
     """(userAgent, navigator.platform, UA-CH platform) for a spoofed OS."""
@@ -149,6 +189,32 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
     devices.append({"kind": "audiooutput", "label": "", "deviceId": "",
                     "groupId": ""})
 
+    r_rate = rng("audioctx")
+    sample_rate = r_rate.choice((44100, 48000, 48000))
+    base_latency = round(512 / sample_rate, 6)
+    output_latency = round(base_latency + r_rate.choice((0.01, 0.013, 0.02, 0.033)), 6)
+
+    r_bat = rng("battery")
+    charging = r_bat.random() < 0.5
+    level = round(r_bat.uniform(0.15, 1.0), 2)
+    if charging:
+        charging_time = 0 if level >= 1.0 else int(r_bat.uniform(600, 10800))
+        discharging_time = float("inf")
+    else:
+        charging_time = float("inf")
+        discharging_time = int(level * r_bat.uniform(9000, 30000))
+    battery = {"charging": charging, "level": level,
+               "chargingTime": charging_time, "dischargingTime": discharging_time}
+
+    r_vo = rng("voices")
+    voice_tuples = list(_VOICE_BASES[resolved.platform])
+    lang_voice = _VOICE_LANG_MATCHES.get(resolved.language)
+    if lang_voice and lang_voice not in voice_tuples:
+        voice_tuples.append(lang_voice)
+    speech_voices = [{"voiceURI": name, "name": name, "lang": lang,
+                      "localService": local, "default": i == 0}
+                     for i, (name, lang, local) in enumerate(voice_tuples)]
+
     return {
         "seed": resolved.seed,
         "platform": resolved.platform,
@@ -169,6 +235,11 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
         "webglRenderer": gpu[1],
         "screen": screen,
         "mediaDevices": devices,
+        "audioSampleRate": sample_rate,
+        "audioBaseLatency": base_latency,
+        "audioOutputLatency": output_latency,
+        "battery": battery,
+        "speechVoices": speech_voices,
         "fonts": list(_FONT_POOLS[resolved.platform]),
         "userAgentMetadata": {
             "brands": [{"brand": b["brand"].split(";")[0], "version": b["version"]}
@@ -188,6 +259,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
             "ua": True, "tz": True, "canvas": True, "rects": True,
             "audio": True, "webgl": True, "plugins": True, "shadow": True,
             "screen": True, "media": True, "worker": True, "fonts": True,
+            "audioRate": True, "battery": True, "speech": True,
         },
         "automation": True,
     }
@@ -668,6 +740,108 @@ _SCRIPT_TEMPLATE = r"""
       const r = prng(hash32('analyser' + arr.length, cfg.seed));
       for (let i = 0; i < arr.length; i++) arr[i] += (r() - 0.5) * 1e-4;
     }, 'getFloatFrequencyData');
+  }
+
+  // ---- audio context rates & latencies ------------------------------------
+  // sampleRate is read straight off BaseAudioContext, so the reported rate
+  // never contradicts the seeded noise math. Contexts constructed with an
+  // explicit sampleRate keep it (OfflineAudioContext render length math
+  // depends on the requested rate).
+  if (cfg.spoof.audioRate && typeof BaseAudioContext !== 'undefined' &&
+      typeof AudioContext !== 'undefined') {
+    const ctxRates = new WeakMap();
+    const RealAC = AudioContext;
+    function VeilAudioContext(...args) {
+      const inst = Reflect.construct(RealAC, args, new.target);
+      const o = args[0];
+      if (o && typeof o === 'object' && o.sampleRate) ctxRates.set(inst, o.sampleRate);
+      return inst;
+    }
+    VeilAudioContext.prototype = RealAC.prototype;
+    markNative(VeilAudioContext, 'AudioContext');
+    try {
+      Object.defineProperty(scope, 'AudioContext',
+        {value: VeilAudioContext, writable: true, configurable: true});
+      Object.defineProperty(RealAC.prototype, 'constructor',
+        {value: VeilAudioContext, writable: true, configurable: true});
+    } catch (e) {}
+    if (typeof OfflineAudioContext !== 'undefined') {
+      const RealOAC = OfflineAudioContext;
+      function VeilOAC(...args) {
+        const inst = Reflect.construct(RealOAC, args, new.target);
+        const o = args[0];
+        if (o && typeof o === 'object' && o.sampleRate) ctxRates.set(inst, o.sampleRate);
+        else if (typeof args[2] === 'number') ctxRates.set(inst, args[2]);
+        return inst;
+      }
+      VeilOAC.prototype = RealOAC.prototype;
+      markNative(VeilOAC, 'OfflineAudioContext');
+      try {
+        Object.defineProperty(scope, 'OfflineAudioContext',
+          {value: VeilOAC, writable: true, configurable: true});
+        Object.defineProperty(RealOAC.prototype, 'constructor',
+          {value: VeilOAC, writable: true, configurable: true});
+      } catch (e) {}
+    }
+    redefine(BaseAudioContext.prototype, 'sampleRate', function sampleRate() {
+      const rec = ctxRates.get(this);
+      return rec === undefined ? cfg.audioSampleRate : rec;
+    });
+    if (!isWorker) {
+      redefine(AudioContext.prototype, 'baseLatency', () => cfg.audioBaseLatency);
+      redefine(AudioContext.prototype, 'outputLatency', () => cfg.audioOutputLatency);
+    }
+  }
+
+  // ---- battery ------------------------------------------------------------
+  // ungoogled-chromium removes the Battery API entirely; a "Google Chrome"
+  // fingerprint without navigator.getBattery is itself a tell, so the whole
+  // surface (class + manager + promise) is synthesized when missing.
+  if (cfg.spoof.battery && !isWorker) {
+    const b = cfg.battery;
+    if (typeof BatteryManager === 'undefined') {
+      const BM = function BatteryManager() {};
+      BM.prototype = Object.create(
+        typeof EventTarget !== 'undefined' ? EventTarget.prototype : Object.prototype);
+      Object.defineProperty(BM.prototype, 'constructor',
+        {value: BM, writable: true, configurable: true});
+      markNative(BM, 'BatteryManager');
+      ['charging', 'level', 'chargingTime', 'dischargingTime'].forEach(p =>
+        redefine(BM.prototype, p, () => b[p]));
+      ['chargingchange', 'levelchange', 'chargingtimechange',
+       'dischargingtimechange'].forEach(t => {
+        try { Object.defineProperty(BM.prototype, 'on' + t,
+          {value: null, writable: true, configurable: true, enumerable: true}); } catch (e) {}
+      });
+      try { Object.defineProperty(scope, 'BatteryManager',
+        {value: BM, writable: true, configurable: true}); } catch (e) {}
+    } else {
+      ['charging', 'level', 'chargingTime', 'dischargingTime'].forEach(p =>
+        redefine(BatteryManager.prototype, p, () => b[p]));
+    }
+    const bmInst = Object.create(BatteryManager.prototype);
+    const navProto = Object.getPrototypeOf(navigator);
+    const stub = markNative(function getBattery() {
+      return Promise.resolve(bmInst);
+    }, 'getBattery');
+    redefine(navigator, 'getBattery', () => stub);
+    redefine(navProto, 'getBattery', () => stub);
+  }
+
+  // ---- speech synthesis ----------------------------------------------------
+  if (cfg.spoof.speech && !isWorker && typeof speechSynthesis !== 'undefined') {
+    const voices = cfg.speechVoices.map(v => {
+      const vo = Object.create(SpeechSynthesisVoice.prototype);
+      Object.defineProperties(vo, {
+        voiceURI: {value: v.voiceURI}, name: {value: v.name},
+        lang: {value: v.lang}, localService: {value: v.localService},
+        default: {value: v.default},
+      });
+      return vo;
+    });
+    redefine(SpeechSynthesis.prototype, 'voices', () => voices.slice());
+    redefFn(SpeechSynthesis.prototype, 'getVoices',
+      markNative(function getVoices() { return voices; }, 'getVoices'));
   }
 
   // ---- webgl -------------------------------------------------------------

@@ -7,6 +7,8 @@ bundle on an unpatched kernel, and the engine survives kernel upgrades.
 
 from __future__ import annotations
 
+import json
+import math
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -465,6 +467,70 @@ class TestJsEngineCoherence:
             await_promise=True)
         assert sorted(kinds) == sorted(d["kind"] for d in params["mediaDevices"])
         assert "audioinput" in kinds
+
+    def test_audio_context_rates_and_latency(self, js_probe_page):
+        prof = _resolved(88)
+        params = js_params(prof)
+        b, page = js_probe_page(prof)
+        r = page.evaluate(
+            "(async()=>{"
+            "const ac=new AudioContext();"
+            "const oac=new OfflineAudioContext(1,4410,44100);"
+            "const opt=new OfflineAudioContext({numberOfChannels:1,length:2205,"
+            "sampleRate:22050});"
+            "return [ac.sampleRate, ac.baseLatency, ac.outputLatency,"
+            "oac.sampleRate, opt.sampleRate,"
+            "ac instanceof AudioContext, oac instanceof OfflineAudioContext];"
+            "})()", await_promise=True)
+        assert r[0] == params["audioSampleRate"]
+        assert r[1] == params["audioBaseLatency"]
+        assert r[2] == params["audioOutputLatency"]
+        # explicit constructor rates are preserved (render math depends on them)
+        assert r[3] == 44100
+        assert r[4] == 22050
+        assert r[5] is True and r[6] is True
+
+    def test_battery_spoofed(self, js_probe_page):
+        prof = _resolved(89)
+        params = js_params(prof)["battery"]
+        b, page = js_probe_page(prof)
+        r = page.evaluate(
+            "(async()=>{const bm=await navigator.getBattery();"
+            "return [bm.charging, bm.level, bm.chargingTime === Infinity,"
+            "bm.dischargingTime === Infinity, bm.dischargingTime,"
+            "bm instanceof BatteryManager];"
+            "})()", await_promise=True)
+        assert r[0] == params["charging"]
+        assert r[1] == params["level"]
+        assert r[2] == math.isinf(params["chargingTime"])
+        assert r[3] == math.isinf(params["dischargingTime"])
+        assert r[4] == params["dischargingTime"]
+        assert r[5] is True
+
+    def test_speech_voices_match_platform_and_language(self, js_probe_page):
+        prof = _resolved(90, platform="windows", language="de-DE")
+        params = js_params(prof)
+        b, page = js_probe_page(prof)
+        r = page.evaluate(
+            "(()=>{const vs=speechSynthesis.getVoices();"
+            "return [vs.length, vs[0] instanceof SpeechSynthesisVoice,"
+            "vs.map(v => v.name).join('|'), vs.map(v => v.lang).join('|'),"
+            "speechSynthesis.voices.length];"
+            "})()")
+        expected_names = [v["name"] for v in params["speechVoices"]]
+        expected_langs = [v["lang"] for v in params["speechVoices"]]
+        assert r[0] == len(expected_names)
+        assert r[1] is True
+        assert r[2] == "|".join(expected_names)
+        assert r[3] == "|".join(expected_langs)
+        assert "German" in "|".join(expected_names)  # de-DE session speaks German
+        assert r[4] == len(expected_names)
+
+    def test_battery_seed_dependent(self):
+        bats = {json.dumps(js_params(_resolved(s), "153.0.8010.52")["battery"],
+                           sort_keys=True)
+                for s in range(1, 25)}
+        assert len(bats) >= 3  # not every instance carries the same charge
 
     def test_webrtc_prefs_seeded_with_proxy(self, make_js_browser):
         import json
