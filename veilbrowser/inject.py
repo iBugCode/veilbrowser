@@ -31,6 +31,34 @@ from .profile import FingerprintProfile
 
 # ---------------------------------------------------------------- params ---
 
+# System fonts each platform is allowed to report as installed. Anything
+# outside the list measures/ checks as "not installed" so the Linux host's
+# font set (DejaVu etc.) never leaks through width probing.
+_FONT_POOLS: dict[str, tuple[str, ...]] = {
+    "windows": (
+        "Arial", "Arial Black", "Calibri", "Cambria", "Comic Sans MS",
+        "Consolas", "Courier New", "Georgia", "Impact", "Lucida Console",
+        "Palatino Linotype", "Segoe UI", "Segoe UI Symbol", "Tahoma",
+        "Times New Roman", "Trebuchet MS", "Verdana", "Webdings", "Wingdings",
+    ),
+    "macos": (
+        "American Typewriter", "Andale Mono", "Arial", "Avenir", "Avenir Next",
+        "Courier New", "Geneva", "Georgia", "Helvetica", "Helvetica Neue",
+        "Menlo", "Monaco", "Optima", "Palatino", "SF Pro Text", "Tahoma",
+        "Times New Roman", "Trebuchet MS", "Verdana",
+    ),
+    "linux": (
+        "DejaVu Sans", "DejaVu Sans Mono", "DejaVu Serif", "FreeMono",
+        "FreeSans", "Liberation Mono", "Liberation Sans", "Liberation Serif",
+        "Noto Sans", "Noto Serif", "Ubuntu", "Ubuntu Mono",
+    ),
+}
+
+_GENERIC_FAMILIES = (
+    "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui",
+    "ui-serif", "ui-sans-serif", "ui-monospace", "math", "fangsong", "emoji",
+)
+
 
 def _ua_strings(platform: str, chrome_full: str, brand: str) -> tuple[str, str, str]:
     """(userAgent, navigator.platform, UA-CH platform) for a spoofed OS."""
@@ -141,6 +169,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
         "webglRenderer": gpu[1],
         "screen": screen,
         "mediaDevices": devices,
+        "fonts": list(_FONT_POOLS[resolved.platform]),
         "userAgentMetadata": {
             "brands": [{"brand": b["brand"].split(";")[0], "version": b["version"]}
                        for b in brands],
@@ -158,7 +187,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
         "spoof": {
             "ua": True, "tz": True, "canvas": True, "rects": True,
             "audio": True, "webgl": True, "plugins": True, "shadow": True,
-            "screen": True, "media": True, "worker": True,
+            "screen": True, "media": True, "worker": True, "fonts": True,
         },
         "automation": True,
     }
@@ -492,18 +521,71 @@ _SCRIPT_TEMPLATE = r"""
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       return Promise.resolve(new Blob([bytes], {type: (opts || {}).type || 'image/png'}));
     }
+  }
 
+  // ---- fonts ---------------------------------------------------------------
+  // Width-probe font enumeration: any family outside cfg.fonts measures as
+  // the generic fallback so the host's real font set never leaks. Same
+  // verdict for document.fonts.check.
+  const GENERIC = new Set(['serif', 'sans-serif', 'monospace', 'cursive',
+    'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace',
+    'math', 'fangsong', 'emoji']);
+  const allowedFonts = new Set(cfg.fonts.map(f => f.toLowerCase()));
+  const SIZE_TAIL_RE = /(?:\d+(?:\.\d+)?(?:px|pt|pc|in|cm|mm|q|em|rem|ex|ch|vw|vh|vmin|vmax)|0(?:px|pt)?)\s*(?:\/\s*(?:[\d.]+|normal|bold)(?:\s+[\d.]+)?\s*)?([\s\S]*)$/i;
+  function familiesOf(font) {
+    const m = String(font).match(SIZE_TAIL_RE);
+    if (!m) return [];
+    return m[1].split(',').map(s =>
+      s.trim().replace(/^['"]+|['"]+$/g, '').toLowerCase()).filter(Boolean);
+  }
+  function familiesAllowed(fams) {
+    return fams.length === 0 ||
+      fams.some(f => GENERIC.has(f) || allowedFonts.has(f));
+  }
+
+  if (cfg.spoof.fonts && !isWorker) {
+    function substituteFamilies(font) {
+      const m = String(font).match(SIZE_TAIL_RE);
+      if (!m || !m[1].trim()) return font;
+      return String(font).slice(0, String(font).length - m[1].length) + 'sans-serif';
+    }
     const origMeasure = CanvasRenderingContext2D.prototype.measureText;
     CanvasRenderingContext2D.prototype.measureText = markNative(function measureText(text) {
-      const m = origMeasure.call(this, text);
+      let out;
+      if (familiesAllowed(familiesOf(this.font))) {
+        out = origMeasure.call(this, text);
+      } else {
+        const saved = this.font;
+        try { this.font = substituteFamilies(saved); } catch (e) {}
+        try { out = origMeasure.call(this, text); }
+        finally { try { this.font = saved; } catch (e) {} }
+      }
       const eps = ((hash32(String(text), cfg.seed) % 1000) - 500) / 50000;  // +-0.01px
       // Own-property override on the real TextMetrics — an Object.create()
       // wrapper would fail the WebIDL brand check when callers read
       // actualBoundingBox*/fontBoundingBox* (creepjs does exactly that).
-      try { Object.defineProperty(m, 'width',
-        {value: m.width + eps, enumerable: true, configurable: true}); } catch (e) {}
-      return m;
+      try { Object.defineProperty(out, 'width',
+        {value: out.width + eps, enumerable: true, configurable: true}); } catch (e) {}
+      return out;
     }, 'measureText');
+
+    if (typeof FontFaceSet !== 'undefined' && document.fonts) {
+      const origCheck = FontFaceSet.prototype.check;
+      FontFaceSet.prototype.check = markNative(function check(font, text) {
+        try {
+          const fams = familiesOf(font);
+          if (fams.length) {
+            if (familiesAllowed(fams)) return true;
+            for (const f of document.fonts) {
+              const fam = String(f.family).replace(/^['"]+|['"]+$/g, '').toLowerCase();
+              if (fams.includes(fam)) break;  // registered webfont: real verdict
+            }
+            return false;
+          }
+        } catch (e) {}
+        return origCheck.call(this, font, text);
+      }, 'check');
+    }
   }
 
   // ---- client rects (main thread only) -----------------------------------

@@ -197,6 +197,29 @@ class TestJsEngineNoise:
         """)
         assert r == [True, True, True]
 
+    def test_fonts_no_host_leak(self, js_probe_page):
+        """Width probing must not reveal the Linux host's font set: a
+        non-whitelisted family (DejaVu Sans — Linux-only) measures exactly
+        like a nonexistent font and fails fonts.check."""
+        prof = _resolved(95, platform="windows")
+        params = js_params(prof)
+        assert "DejaVu Sans" not in params["fonts"]
+        b, page = js_probe_page(prof)
+        r = page.evaluate("""
+          (() => {
+            const m = (f) => {
+              const x = document.createElement('canvas').getContext('2d');
+              x.font = `12px '${f}'`;
+              return x.measureText('mmmmmmmmmmlli').width;
+            };
+            return [m('DejaVu Sans') === m('NoSuchFontXYZ'),
+                    document.fonts.check("12px 'DejaVu Sans'"),
+                    document.fonts.check("12px 'Arial'"),
+                    document.fonts.check('12px sans-serif')];
+          })()
+        """)
+        assert r == [True, False, True, True]
+
     def test_canvas_noised_vs_vanilla_control(self, js_probe_page, vanilla_path):
         """Even a text-only canvas must differ from the unpatched baseline —
         this is the gap fingerprint-chromium's kernel leaves open."""
