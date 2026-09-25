@@ -110,7 +110,7 @@ UA↔platform↔UA-CH↔HTTP 头四面一致。种子是 32 位整数,同一 see
 ## 测试
 
 ```bash
-python -m pytest tests/ -q     # 98 项:单元 + 148 内核集成 + 153 vanilla JS 引擎 + E2E 代理链 + worker 作用域 + GeoIP
+python -m pytest tests/ -q     # 106 项:单元 + 148 内核集成 + 153 vanilla JS 引擎 + E2E 代理链 + worker 作用域 + GeoIP
 ```
 
 覆盖:两套内核上的身份一致性、UA-CH、canvas 种子噪声与确定性、audio 种子
@@ -122,13 +122,15 @@ getter 原生伪装(toString 检测)、iframe 注入覆盖、**HTTP 头与 navig
 **Geolocation/WebRTC 出口 IP**(假 geo 链端到端)、**WebGL 扩展/精度**、
 **worker 作用域存储配额**、**kernel+js_overlay**(纯文本 canvas 加噪且内核身份不变)。
 
-## 公开检测工具实测(v0.3.0 验收,v0.4.0/v0.5.0 复验)
+## 公开检测工具实测(v0.3.0 验收,v0.4.0–v0.6.0 复验)
 
-- **bot.sannysoft.com:57/57 全部通过**(含 WebDriver New、Headless 检测组)。
-- **CreepJS:0 个控制台错误、0 个异常、无 lie 标记**;DedicatedWorker 与
-  ServiceWorker 作用域的 UA/UA-CH/平台/时区/GPU 全部与页面自洽(置信度 high);
-  字体面不再暴露宿主 Linux 字体集(DejaVu 系列);Battery 与 speech voices
-  区块按种子档位连贯渲染(v0.4.0 新增面复验无回归)。
+- **bot.sannysoft.com:58/58 全部通过**(含 WebDriver New、Headless、
+  MQ_SCREEN 媒体查询组)。
+- **CreepJS(v0.6.0):0 lie、headless 0%、stealth 0%、like headless 6%**
+  (v0.5.0 为 38%/33%/20%;残余 6% 为 light 配色档位的
+  prefers-color-scheme 项,dark 档位种子为 0%);0 控制台错误、0 异常;
+  DedicatedWorker 与 ServiceWorker 作用域的 UA/UA-CH/平台/时区/GPU 全部
+  与页面自洽(置信度 high);字体面不再暴露宿主 Linux 字体集。
 - Canvas 噪声会被 CreepJS 标注 "rgba noise" —— 这是噪声类伪装的固有代价
   (fingerprint-chromium 同理),换来的是跨实例不可关联。
 
@@ -140,20 +142,24 @@ HTTP 头一致性、WebRTC IP 策略、mediaDevices 枚举、geo 一致性、
 **字体白名单**(measureText 族替换 + fonts.check + FontFace local() 拦截)、
 **代理出口 GeoIP 自动对齐**(经同一条代理链查询,显式指定优先,失败兜底)、
 **每平台 GPU 串**(Windows D3D11 / macOS Metal / Linux Mesa,与平台联动)、
-**音频采样率/延迟 + speech voices + Battery**。
+**音频采样率/延迟 + speech voices + Battery**、
+**指纹/实况窗口分离**(screen 走档位,窗口指标真实,`screen.__width/
+__height` 暴露真实宿主窗口——CloakBrowser 特性)、
+**headless=new 环境痕迹全闭**(Notification/permissions、hasFocus、
+Web Share、ContentIndex/ContactsManager/downlinkMax、系统色、
+prefers-color-scheme)、
+**lie-proof wrapper 形态**(不可构造方法 wrapper + getter 品牌校验 +
+prototype-only 访问器 + 跨 realm toString 注册表,creepjs lie 检测 0 命中)。
 **尚未吸收(诚实清单)**:
 
-- C++ 层拦截:JS hook 可被 `toString`/descriptor 深检识别(我们已做原生
-  伪装,但非 C++ 级不可检测);路径:基于 `kernel-patches/` 的 144 基线
-  rebase 到新内核自编译。
+- C++ 层拦截:JS hook 已做 toString/descriptor/receiver 级伪装,但非 C++
+  级不可检测;路径:基于 `kernel-patches/` 的 144 基线 rebase 到新内核自编译。
 - 真实字体度量:白名单外的字体族测量为"未安装",但白名单内字体在宿主上
   无对应字形文件,宽度来自回退字体(Camoufox 捆绑字体包+字距偏移)。
-- C++ 层拦截:JS hook 已做原生 toString 伪装,但非 C++ 级不可检测;路径:
-  基于 `kernel-patches/` 的 144 基线 rebase 到新内核自编译。
 - TLS 指纹与 Chrome 的对齐未验证;CDP 自动化自身信号未加固(我们以 CDP
   驱动,这是架构固有面);代理计时信号(DNS/SSL)未清除。
-- 真实字体度量:白名单外的字体族测量为"未安装",但白名单内字体在宿主上
-  无对应字形文件,宽度来自回退字体(Camoufox 捆绑字体包+字距偏移)。
+- 媒体查询 vs 指纹屏幕:窗口指标保持真实以通过 matchMedia 交叉核对,
+  CSS 布局视口仍是宿主真实尺寸(C++ 级重排才能彻底一致)。
 - 行为层:人类化鼠标轨迹(Camoufox Cursory、CloakBrowser humanize)、
   输入节奏随机化——静态指纹对抗成熟后的新主战场。
 - 生态:Playwright/Puppeteer drop-in API、多语言客户端、Docker/远程 CDP
