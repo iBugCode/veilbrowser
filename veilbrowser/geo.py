@@ -16,7 +16,8 @@ from dataclasses import replace
 
 from .profile import FingerprintProfile
 
-_GEO_URL = "http://ip-api.com/json/?fields=status,country,countryCode,timezone"
+_GEO_URL = ("http://ip-api.com/json/?fields=status,country,countryCode,"
+            "timezone,lat,lon,query")
 
 # Country -> locale consistent with profile.locale pools.  Unlisted
 # countries fall back to en-US rather than an exotic locale a seed pool
@@ -59,10 +60,15 @@ def query_geo(*, local_port: int | None = None,
 
 
 def align_profile(profile: FingerprintProfile, geo: dict) -> FingerprintProfile:
-    """Fill unset timezone/language from exit-IP geo; explicit values win."""
+    """Fill unset timezone/language/geolocation/webrtc_ip from exit-IP geo;
+    explicit values win."""
     p = profile
     if p.timezone is None and geo.get("timezone"):
         p = replace(p, timezone=geo["timezone"])
     if p.language is None:
         p = replace(p, language=locale_for_country(geo.get("countryCode")))
+    if p.geolocation is None and geo.get("lat") is not None:
+        p = replace(p, geolocation=(geo["lat"], geo["lon"]))
+    if p.webrtc_ip is None and geo.get("query"):
+        p = replace(p, webrtc_ip=geo["query"])
     return p

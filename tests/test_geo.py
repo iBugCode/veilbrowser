@@ -15,7 +15,9 @@ from veilbrowser.profile import FingerprintProfile
 from veilbrowser.proxy import LocalForwarder, UpstreamProxy, parse_proxy_url
 
 _GEO_JSON = json.dumps({"status": "success", "country": "Japan",
-                        "countryCode": "JP", "timezone": "Asia/Tokyo"}).encode()
+                        "countryCode": "JP", "timezone": "Asia/Tokyo",
+                        "lat": 35.6895, "lon": 139.6917,
+                        "query": "203.0.113.7"}).encode()
 
 
 class _FakeOrigin(http.server.BaseHTTPRequestHandler):
@@ -177,5 +179,47 @@ def test_launch_explicit_profile_beats_geo(fake_geo_chain, vanilla_path):
         r = page.evaluate(
             "[Intl.DateTimeFormat().resolvedOptions().timeZone, navigator.language]")
         assert r == ["America/New_York", "en-US"]
+    finally:
+        b.stop()
+
+
+def test_launch_fills_geolocation_and_webrtc_ip(fake_geo_chain, vanilla_path):
+    from veilbrowser import launch
+    p = FingerprintProfile(seed=125, platform="windows",
+                           proxy=f"http://127.0.0.1:{fake_geo_chain.port}")
+    b = launch(p, engine="js", binary=vanilla_path)
+    try:
+        assert b.profile.webrtc_ip == "203.0.113.7"
+        assert b.profile.geolocation == (35.6895, 139.6917)
+        page = b.new_page("about:blank")
+        pos = page.evaluate(
+            "(async()=>{const p=await new Promise((res,rej)=>"
+            "navigator.geolocation.getCurrentPosition(res,rej));"
+            "return [p.coords.latitude, p.coords.longitude,"
+            "p.coords instanceof GeolocationCoordinates];})()",
+            await_promise=True)
+        assert abs(pos[0] - 35.6895) < 0.05
+        assert abs(pos[1] - 139.6917) < 0.05
+        assert pos[2] is True
+    finally:
+        b.stop()
+
+
+def test_launch_explicit_geolocation_beats_geo(fake_geo_chain, vanilla_path):
+    from veilbrowser import launch
+    p = FingerprintProfile(seed=126, platform="windows", language="en-US",
+                           timezone="America/New_York",
+                           geolocation=(48.8566, 2.3522),
+                           proxy=f"http://127.0.0.1:{fake_geo_chain.port}")
+    b = launch(p, engine="js", binary=vanilla_path)
+    try:
+        assert b.profile.geolocation == (48.8566, 2.3522)
+        assert b.profile.webrtc_ip == "203.0.113.7"
+        page = b.new_page("about:blank")
+        lat = page.evaluate(
+            "(async()=>{const p=await new Promise((res,rej)=>"
+            "navigator.geolocation.getCurrentPosition(res,rej));"
+            "return p.coords.latitude;})()", await_promise=True)
+        assert abs(lat - 48.8566) < 0.05
     finally:
         b.stop()

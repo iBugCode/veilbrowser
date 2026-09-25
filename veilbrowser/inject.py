@@ -215,6 +215,20 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
     base_latency = round(512 / sample_rate, 6)
     output_latency = round(base_latency + r_rate.choice((0.01, 0.013, 0.02, 0.033)), 6)
 
+    r_sto = rng("storage")
+    storage = {"usage": r_sto.randint(2_000_000, 40_000_000),
+               "quota": r_sto.randint(120, 480) * 1024 ** 3}
+
+    if resolved.geolocation:
+        r_geo = rng("geolocation")
+        geolocation = {
+            "lat": round(resolved.geolocation[0] + r_geo.uniform(-0.02, 0.02), 6),
+            "lon": round(resolved.geolocation[1] + r_geo.uniform(-0.02, 0.02), 6),
+            "accuracy": round(r_geo.uniform(20, 150), 1),
+        }
+    else:
+        geolocation = None
+
     r_bat = rng("battery")
     charging = r_bat.random() < 0.5
     level = round(r_bat.uniform(0.15, 1.0), 2)
@@ -261,6 +275,9 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
         "audioOutputLatency": output_latency,
         "battery": battery,
         "speechVoices": speech_voices,
+        "storage": storage,
+        "geolocation": geolocation,
+        "webrtcIp": resolved.webrtc_ip,
         "fonts": list(_FONT_POOLS[resolved.platform]),
         "userAgentMetadata": {
             "brands": [{"brand": b["brand"].split(";")[0], "version": b["version"]}
@@ -280,7 +297,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
             "ua": True, "tz": True, "canvas": True, "rects": True,
             "audio": True, "webgl": True, "plugins": True, "shadow": True,
             "screen": True, "media": True, "worker": True, "fonts": True,
-            "audioRate": True, "battery": True, "speech": True,
+            "audioRate": True, "battery": True, "speech": True, "storage": True,
         },
         "automation": True,
     }
@@ -811,6 +828,9 @@ _SCRIPT_TEMPLATE = r"""
     if (!isWorker) {
       redefine(AudioContext.prototype, 'baseLatency', () => cfg.audioBaseLatency);
       redefine(AudioContext.prototype, 'outputLatency', () => cfg.audioOutputLatency);
+      if (typeof AudioDestinationNode !== 'undefined') {
+        redefine(AudioDestinationNode.prototype, 'maxChannelCount', () => 2);
+      }
     }
   }
 
@@ -865,13 +885,185 @@ _SCRIPT_TEMPLATE = r"""
       markNative(function getVoices() { return voices; }, 'getVoices'));
   }
 
+  // ---- storage quota --------------------------------------------------------
+  // Ephemeral profiles report tiny quotas that read as private/incognito
+  // (BrowserScan docks 10% for it); report a plausible desktop value.
+  if (cfg.spoof.storage && !isWorker && typeof StorageManager !== 'undefined' &&
+      navigator.storage) {
+    const s = cfg.storage;
+    redefFn(StorageManager.prototype, 'estimate', markNative(function estimate() {
+      return Promise.resolve({usage: s.usage, quota: s.quota});
+    }, 'estimate'));
+  }
+
+  // ---- geolocation ------------------------------------------------------------
+  // Coordinates come from the proxy-exit geo query (geo.py), jittered per
+  // seed. Only hooked when the profile carries a location; otherwise the
+  // native prompt/deny path is untouched.
+  if (cfg.geolocation && !isWorker && navigator.geolocation) {
+    const g = cfg.geolocation;
+    function makePosition() {
+      const coords = Object.create(GeolocationCoordinates.prototype);
+      Object.defineProperties(coords, {
+        latitude: {value: g.lat, enumerable: true},
+        longitude: {value: g.lon, enumerable: true},
+        accuracy: {value: g.accuracy, enumerable: true},
+        altitude: {value: null, enumerable: true},
+        altitudeAccuracy: {value: null, enumerable: true},
+        heading: {value: null, enumerable: true},
+        speed: {value: null, enumerable: true},
+      });
+      const pos = Object.create(GeolocationPosition.prototype);
+      Object.defineProperties(pos, {
+        coords: {value: coords, enumerable: true},
+        timestamp: {value: Date.now(), enumerable: true},
+      });
+      return pos;
+    }
+    redefFn(Geolocation.prototype, 'getCurrentPosition', markNative(
+      function getCurrentPosition(success, error, options) {
+        setTimeout(() => { try { success(makePosition()); } catch (e) {} }, 30);
+      }, 'getCurrentPosition'));
+    let watchId = 0;
+    redefFn(Geolocation.prototype, 'watchPosition', markNative(
+      function watchPosition(success, error, options) {
+        watchId += 1;
+        setTimeout(() => { try { success(makePosition()); } catch (e) {} }, 30);
+        return watchId;
+      }, 'watchPosition'));
+    redefFn(Geolocation.prototype, 'clearWatch', markNative(
+      function clearWatch(id) {}, 'clearWatch'));
+  }
+
+  // ---- WebRTC ICE exit IP ----------------------------------------------------
+  // Rewrite every IPv4 in candidate lines (local, raddr and the offer/answer
+  // SDP) to the proxy exit IP so the page's WebRTC story matches its network
+  // story. WebRTC media is already neutered by the non-proxied-UDP pref, so
+  // munging costs nothing functional; only hook when an exit IP is known.
+  if (cfg.webrtcIp && !isWorker && typeof RTCPeerConnection !== 'undefined') {
+    const EXIT = cfg.webrtcIp;
+    const IP_RE = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g;
+    const IP_TEST_RE = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/;
+    function mungeSdp(sdp) {
+      if (!sdp || sdp.indexOf('a=candidate:') === -1) return sdp;
+      return sdp.split('\n').map(line => {
+        if (line.indexOf('a=candidate:') !== 0) return line;
+        return line.replace(IP_RE, EXIT);
+      }).join('\n');
+    }
+    const NativePC = RTCPeerConnection.prototype;
+    const origOfferFn = NativePC.createOffer;
+    const origAnswerFn = NativePC.createAnswer;
+    const origSetLocal = NativePC.setLocalDescription;
+    function mungedDesc(desc) {
+      if (desc && typeof desc.sdp === 'string') {
+        const sdp = mungeSdp(desc.sdp);
+        if (sdp !== desc.sdp) {
+          try { return new RTCSessionDescription({type: desc.type, sdp}); } catch (e) {}
+        }
+      }
+      return desc;
+    }
+    redefFn(NativePC, 'createOffer', markNative(function createOffer(...a) {
+      return origOfferFn.apply(this, a).then(mungedDesc);
+    }, 'createOffer'));
+    redefFn(NativePC, 'createAnswer', markNative(function createAnswer(...a) {
+      return origAnswerFn.apply(this, a).then(mungedDesc);
+    }, 'createAnswer'));
+    redefFn(NativePC, 'setLocalDescription', markNative(function setLocalDescription(desc, ...a) {
+      return origSetLocal.call(this, mungedDesc(desc), ...a);
+    }, 'setLocalDescription'));
+    // candidate events: swap in a real RTCIceCandidate carrying the exit IP
+    function wrapListener(fn) {
+      return function (event) {
+        let e = event;
+        try {
+          if (e && e.candidate && e.candidate.candidate &&
+              IP_TEST_RE.test(e.candidate.candidate)) {
+            const c = e.candidate;
+            const munged = new RTCIceCandidate({
+              candidate: c.candidate.replace(IP_RE, EXIT),
+              sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex,
+              usernameFragment: c.usernameFragment,
+            });
+            e = Object.create(Object.getPrototypeOf(e), {
+              candidate: {value: munged, enumerable: true, configurable: true},
+            });
+          }
+        } catch (err) {}
+        return fn.call(this, e);
+      };
+    }
+    const origAEL = NativePC.addEventListener;
+    redefFn(NativePC, 'addEventListener', markNative(function addEventListener(type, fn, opts) {
+      return origAEL.call(this, type, type === 'icecandidate' && typeof fn === 'function'
+        ? wrapListener(fn) : fn, opts);
+    }, 'addEventListener'));
+    const ON_KEY = 'onicecandidate';
+    const origOn = Object.getOwnPropertyDescriptor(NativePC, ON_KEY);
+    if (origOn && origOn.set) {
+      Object.defineProperty(NativePC, ON_KEY, {
+        get: markNative(function onicecandidate() { return origOn.get.call(this); },
+                       'get onicecandidate'),
+        set: markNative(function onicecandidate(fn) {
+          origOn.set.call(this, typeof fn === 'function' ? wrapListener(fn) : fn);
+        }, 'set onicecandidate'),
+        configurable: true, enumerable: origOn.enumerable,
+      });
+    }
+  }
+
   // ---- webgl -------------------------------------------------------------
   if (cfg.spoof.webgl) {
     const VENDOR = 0x1F00, RENDERER = 0x1F01, VERSION = 0x1F02;
     const UNMASKED_VENDOR = 0x9245, UNMASKED_RENDERER = 0x9246;
+    // Canonical Chrome extension sets: the reported list is the intersection
+    // with what the host really supports, so every entry still resolves via
+    // getExtension (a listed-but-null extension is itself a detection tell)
+    // while host-specific extras (Mesa/SwiftShader variants) never leak.
+    const CHROME_EXT1 = new Set([
+      'ANGLE_instanced_arrays', 'EXT_blend_minmax', 'EXT_color_buffer_half_float',
+      'EXT_disjoint_timer_query', 'EXT_float_blend', 'EXT_frag_depth',
+      'EXT_shader_texture_lod', 'EXT_sRGB', 'EXT_texture_compression_bptc',
+      'EXT_texture_compression_rgtc', 'EXT_texture_filter_anisotropic',
+      'KHR_parallel_shader_compile', 'OES_element_index_uint',
+      'OES_fbo_render_mipmap', 'OES_standard_derivatives', 'OES_texture_float',
+      'OES_texture_float_linear', 'OES_texture_half_float',
+      'OES_texture_half_float_linear', 'OES_vertex_array_object',
+      'WEBGL_color_buffer_float', 'WEBGL_compressed_texture_astc',
+      'WEBGL_compressed_texture_etc', 'WEBGL_compressed_texture_etc1',
+      'WEBGL_compressed_texture_pvrtc', 'WEBGL_compressed_texture_s3tc',
+      'WEBGL_compressed_texture_s3tc_srgb', 'WEBGL_debug_renderer_info',
+      'WEBGL_debug_shaders', 'WEBGL_lose_context', 'WEBGL_multi_draw',
+    ]);
+    const CHROME_EXT2 = new Set([
+      'EXT_color_buffer_float', 'EXT_color_buffer_half_float',
+      'EXT_disjoint_timer_query_webgl2', 'EXT_float_blend',
+      'EXT_texture_compression_bptc', 'EXT_texture_compression_rgtc',
+      'EXT_texture_filter_anisotropic', 'EXT_texture_norm16',
+      'KHR_parallel_shader_compile', 'OES_draw_buffers_indexed',
+      'OES_texture_float_linear', 'WEBGL_blend_equation_advanced_coherent',
+      'WEBGL_compressed_texture_astc', 'WEBGL_compressed_texture_etc',
+      'WEBGL_compressed_texture_etc1', 'WEBGL_compressed_texture_pvrtc',
+      'WEBGL_compressed_texture_s3tc', 'WEBGL_compressed_texture_s3tc_srgb',
+      'WEBGL_debug_renderer_info', 'WEBGL_debug_shaders', 'WEBGL_lose_context',
+      'WEBGL_multi_draw', 'WEBGL_render_shared_exponent',
+    ]);
+    // ANGLE D3D11 canonical precision: floats 127/127/23, ints 31/30/0
+    const FLOAT_PREC = {rangeMin: 127, rangeMax: 127, precision: 23};
+    const INT_PREC = {rangeMin: 31, rangeMax: 30, precision: 0};
     [typeof WebGLRenderingContext !== 'undefined' && WebGLRenderingContext,
      typeof WebGL2RenderingContext !== 'undefined' && WebGL2RenderingContext].forEach(Ctor => {
       if (!Ctor) return;
+      const isGL2 = (typeof WebGL2RenderingContext !== 'undefined' &&
+                     Ctor === WebGL2RenderingContext);
+      const allow = isGL2 ? CHROME_EXT2 : CHROME_EXT1;
+      const origGSE = Ctor.prototype.getSupportedExtensions;
+      redefFn(Ctor.prototype, 'getSupportedExtensions', markNative(
+        function getSupportedExtensions() {
+          const real = origGSE.call(this) || [];
+          return real.filter(e => allow.has(e));
+        }, 'getSupportedExtensions'));
       const origGP = Ctor.prototype.getParameter;
       Ctor.prototype.getParameter = markNative(function getParameter(p) {
         if (p === UNMASKED_VENDOR) return cfg.webglVendor;
@@ -890,6 +1082,24 @@ _SCRIPT_TEMPLATE = r"""
               if (i % 4 !== 3) px[i] = (px[i] + ((r() * 2) | 0)) & 0xff;
           }
         }, 'readPixels');
+      }
+      // precision formats differ by host driver (Mesa/SwiftShader vs D3D11);
+      // report the ANGLE D3D11 canon. Wrapping the real instance keeps the
+      // WebGLShaderPrecisionFormat brand (nothing consumes it natively).
+      const origGSPF = Ctor.prototype.getShaderPrecisionFormat;
+      if (origGSPF) {
+        Ctor.prototype.getShaderPrecisionFormat = markNative(
+          function getShaderPrecisionFormat(shaderType, precisionType) {
+            const fmt = origGSPF.call(this, shaderType, precisionType);
+            if (!fmt) return fmt;
+            const canon = (precisionType >= 0x8DF0 && precisionType <= 0x8DF2)
+              ? FLOAT_PREC : INT_PREC;
+            return Object.create(Object.getPrototypeOf(fmt), {
+              rangeMin: {value: canon.rangeMin, enumerable: true, configurable: true},
+              rangeMax: {value: canon.rangeMax, enumerable: true, configurable: true},
+              precision: {value: canon.precision, enumerable: true, configurable: true},
+            });
+          }, 'getShaderPrecisionFormat');
       }
     });
   }

@@ -230,7 +230,8 @@ class Browser:
 def _geo_align(profile: FingerprintProfile) -> FingerprintProfile:
     """Query the exit IP through the configured proxy (local forwarder for
     auth/socks5 upstreams, direct urllib for plain http) and fill unset
-    timezone/language. Fail-open: on any error the profile is untouched."""
+    timezone/language/geolocation/webrtc_ip. Fail-open: on any error the
+    profile is untouched."""
     from .geo import align_profile, query_geo
     try:
         up = parse_proxy_url(profile.proxy)
@@ -311,8 +312,11 @@ def launch(profile: FingerprintProfile | None = None,
     udd = user_data_dir or tempfile.mkdtemp(prefix="veil-")
 
     # GeoIP alignment must run before resolved(): the seed then fills only
-    # what the exit IP didn't already determine (unset timezone/language).
-    if profile.proxy and (profile.timezone is None or profile.language is None):
+    # what the exit IP didn't already determine. Also resolves geolocation
+    # and the WebRTC exit IP; explicit values always win.
+    if profile.proxy and (profile.timezone is None or profile.language is None
+                          or profile.geolocation is None
+                          or profile.webrtc_ip is None):
         profile = _geo_align(profile)
     profile = profile.resolved()
     if profile.proxy:

@@ -546,6 +546,102 @@ class TestJsEngineCoherence:
                 else:
                     assert params["webglVendor"].startswith("Google Inc. (")
 
+    def test_webgl_extensions_intersect_chrome_set(self, js_probe_page):
+        # reported list ⊆ canonical Chrome set AND every entry really
+        # resolves via getExtension (listed-but-null is a detection tell)
+        b, page = js_probe_page(_resolved(91))
+        r = page.evaluate("""
+          (() => {
+            const g1 = document.createElement('canvas').getContext('webgl');
+            const g2 = document.createElement('canvas').getContext('webgl2');
+            const exts1 = g1.getSupportedExtensions() || [];
+            const exts2 = (g2 && g2.getSupportedExtensions()) || [];
+            const missing = [];
+            for (const e of exts1) if (!g1.getExtension(e)) missing.push(e);
+            for (const e of exts2) if (!g2.getExtension(e)) missing.push(e);
+            return [exts1.length, exts2.length, missing.length,
+                    exts1.includes('WEBGL_debug_renderer_info')];
+          })()""")
+        assert r[0] > 0 and r[1] > 0
+        assert r[2] == 0
+        assert r[3] is True
+
+    def test_shader_precision_canonical(self, js_probe_page):
+        b, page = js_probe_page(_resolved(92))
+        r = page.evaluate("""
+          (() => {
+            const g = document.createElement('canvas').getContext('webgl');
+            const f = g.getShaderPrecisionFormat(g.FRAGMENT_SHADER, g.HIGH_FLOAT);
+            const i = g.getShaderPrecisionFormat(g.VERTEX_SHADER, g.HIGH_INT);
+            return [f instanceof WebGLShaderPrecisionFormat,
+                    [f.rangeMin, f.rangeMax, f.precision].join(','),
+                    [i.rangeMin, i.rangeMax, i.precision].join(',')];
+          })()""")
+        # ANGLE D3D11 canon: floats 127/127/23, ints 31/30/0
+        assert r == [True, "127,127,23", "31,30,0"]
+
+    def test_storage_estimate_spoofed(self, js_probe_page):
+        prof = _resolved(93)
+        params = js_params(prof)
+        b, page = js_probe_page(prof)
+        r = page.evaluate(
+            "navigator.storage.estimate().then(e => [e.quota, e.usage])",
+            await_promise=True)
+        assert r[0] == params["storage"]["quota"]
+        assert r[1] == params["storage"]["usage"]
+        assert r[0] > 100 * 1024 ** 3  # not an incognito-sized quota
+
+    def test_audio_destination_max_channels(self, js_probe_page):
+        b, page = js_probe_page(_resolved(95))
+        v = page.evaluate("new AudioContext().destination.maxChannelCount")
+        assert v == 2
+
+    def test_webrtc_ice_exit_ip(self, js_probe_page):
+        prof = _resolved(94, webrtc_ip="203.0.113.7")
+        b, page = js_probe_page(prof)
+        r = page.evaluate("""
+          (async () => {
+            const pc = new RTCPeerConnection();
+            const got = [];
+            pc.addEventListener('icecandidate', e => {
+              if (e.candidate) got.push(e.candidate.candidate);
+            });
+            pc.onicecandidate = e => {
+              if (e.candidate) got.push('on:' + e.candidate.candidate);
+            };
+            const cand = new RTCIceCandidate({
+              candidate: 'candidate:842163049 1 udp 1677729535 192.168.1.4 54433 typ host',
+              sdpMid: '0', sdpMLineIndex: 0});
+            const ev = new Event('icecandidate');
+            Object.defineProperty(ev, 'candidate', {value: cand});
+            pc.dispatchEvent(ev);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);  // throws if we broke the brand
+            return [got.join('|'), pc.localDescription.sdp.length > 0,
+                    pc instanceof RTCPeerConnection];
+          })()""", await_promise=True)
+        assert "203.0.113.7" in r[0]
+        assert "192.168.1.4" not in r[0]
+        assert r[0].count("203.0.113.7") == 2  # both registration paths
+        assert r[1] is True and r[2] is True
+
+    def test_no_webrtc_ip_no_munging(self, js_probe_page):
+        b, page = js_probe_page(_resolved(96))
+        r = page.evaluate("""
+          (() => {
+            const pc = new RTCPeerConnection();
+            const got = [];
+            pc.onicecandidate = e => { if (e.candidate) got.push(e.candidate.candidate); };
+            const cand = new RTCIceCandidate({
+              candidate: 'candidate:1 1 udp 1 192.168.1.4 5000 typ host',
+              sdpMid: '0', sdpMLineIndex: 0});
+            const ev = new Event('icecandidate');
+            Object.defineProperty(ev, 'candidate', {value: cand});
+            pc.dispatchEvent(ev);
+            return got.join('|');
+          })()""")
+        assert "192.168.1.4" in r  # untouched without a known exit IP
+
     def test_webrtc_prefs_seeded_with_proxy(self, make_js_browser):
         import json
         import os

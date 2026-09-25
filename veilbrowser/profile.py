@@ -71,6 +71,8 @@ class FingerprintProfile:
     hardware_concurrency: int | None = None
     disable_spoofing: tuple[str, ...] = ()  # subset of font/audio/canvas/clientrects/gpu
     proxy: str | None = None             # scheme://[user:pass@]host:port
+    geolocation: tuple[float, float] | None = None  # (lat, lon) for navigator.geolocation
+    webrtc_ip: str | None = None         # public IP reported in WebRTC ICE candidates
     extra_flags: list[str] = field(default_factory=list)
 
     def resolved(self) -> "FingerprintProfile":
