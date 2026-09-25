@@ -47,9 +47,13 @@ hardwareConcurrency/languages/plugins)、时区全套(`Date` 构造器/本地 ge
 `toString`/`Intl.DateTimeFormat`)、canvas(getImageData/toDataURL/toBlob/
 measureText 加噪,**纯文本 canvas 也加噪**——内核补丁的已知缺口)、client
 rects 微扰、audio 渲染加扰、WebGL vendor/renderer、屏幕指标一致性、
-mediaDevices 枚举、AudioContext 采样率/延迟(显式构造参数保持)、
+mediaDevices 枚举、AudioContext 采样率/延迟/最大声道数(显式构造参数保持)、
 speechSynthesis 按平台+语言的声音池、Battery API 完整合成(ungoogled
-内核移除了它——对自称 Chrome 的指纹,"API 缺失"本身就是特征);HTTP 层由
+内核移除了它——对自称 Chrome 的指纹,"API 缺失"本身就是特征)、
+**WebGL 扩展列表**(与 Chrome 官方集取交集,getExtension 始终可解析)与
+**shader 精度**(ANGLE D3D11 基准)、**存储配额**(desktop 量级,含 worker
+作用域——小配额会被判为隐身模式)、**Geolocation**(代理出口坐标+种子抖动)、
+**WebRTC ICE 出口 IP**(candidate/SDP 中 IPv4 改写为代理出口 IP);HTTP 层由
 CDP 覆写保证 `User-Agent`/`Sec-CH-UA*`/`Accept-Language` 与页面内完全一致。
 
 ## 快速开始
@@ -106,7 +110,7 @@ UA↔platform↔UA-CH↔HTTP 头四面一致。种子是 32 位整数,同一 see
 ## 测试
 
 ```bash
-python -m pytest tests/ -q     # 89 项:单元 + 148 内核集成 + 153 vanilla JS 引擎 + E2E 代理链 + worker 作用域 + GeoIP
+python -m pytest tests/ -q     # 98 项:单元 + 148 内核集成 + 153 vanilla JS 引擎 + E2E 代理链 + worker 作用域 + GeoIP
 ```
 
 覆盖:两套内核上的身份一致性、UA-CH、canvas 种子噪声与确定性、audio 种子
@@ -115,9 +119,10 @@ getter 原生伪装(toString 检测)、iframe 注入覆盖、**HTTP 头与 navig
 一致性**(真实靶站捕获 Sec-CH-UA*)、屏幕指标、WebRTC 预置、代理全链认证、
 **worker 作用域伪装**(DedicatedWorker UA/时区/webdriver/GPU)、
 **GeoIP 对齐**(假代理链 E2E:出口 IP → Asia/Tokyo/ja-JP)、
-**kernel+js_overlay**(纯文本 canvas 加噪且内核身份不变)。
+**Geolocation/WebRTC 出口 IP**(假 geo 链端到端)、**WebGL 扩展/精度**、
+**worker 作用域存储配额**、**kernel+js_overlay**(纯文本 canvas 加噪且内核身份不变)。
 
-## 公开检测工具实测(v0.3.0 验收,v0.4.0 复验)
+## 公开检测工具实测(v0.3.0 验收,v0.4.0/v0.5.0 复验)
 
 - **bot.sannysoft.com:57/57 全部通过**(含 WebDriver New、Headless 检测组)。
 - **CreepJS:0 个控制台错误、0 个异常、无 lie 标记**;DedicatedWorker 与
@@ -143,12 +148,16 @@ HTTP 头一致性、WebRTC IP 策略、mediaDevices 枚举、geo 一致性、
   rebase 到新内核自编译。
 - 真实字体度量:白名单外的字体族测量为"未安装",但白名单内字体在宿主上
   无对应字形文件,宽度来自回退字体(Camoufox 捆绑字体包+字距偏移)。
-- C++ 级音频/字体伪装(当前 JS hook 已做原生 toString 伪装,但非 C++ 级
-  不可检测)。
+- C++ 层拦截:JS hook 已做原生 toString 伪装,但非 C++ 级不可检测;路径:
+  基于 `kernel-patches/` 的 144 基线 rebase 到新内核自编译。
+- TLS 指纹与 Chrome 的对齐未验证;CDP 自动化自身信号未加固(我们以 CDP
+  驱动,这是架构固有面);代理计时信号(DNS/SSL)未清除。
 - 真实字体度量:白名单外的字体族测量为"未安装",但白名单内字体在宿主上
   无对应字形文件,宽度来自回退字体(Camoufox 捆绑字体包+字距偏移)。
-- 行为层:人类化鼠标轨迹(Camoufox Cursory)、输入节奏随机化——静态指纹
-  对抗成熟后的新主战场。
+- 行为层:人类化鼠标轨迹(Camoufox Cursory、CloakBrowser humanize)、
+  输入节奏随机化——静态指纹对抗成熟后的新主战场。
+- 生态:Playwright/Puppeteer drop-in API、多语言客户端、Docker/远程 CDP
+  服务模式、档案管理 GUI。
 
 已知残余:`engine="kernel"` 纯模式(不开 `js_overlay`)的纯文本 canvas 仍
 不加噪;GPU 档位与平台联动在 kernel 模式由 fingerprint-chromium 决定。
