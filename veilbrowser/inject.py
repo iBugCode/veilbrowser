@@ -989,21 +989,23 @@ def build_script(params: dict) -> str:
     return _SCRIPT_TEMPLATE.replace("__VEIL_CFG__", cfg)
 
 
-def install(page_cdp, params: dict) -> None:
+def install(page_cdp, params: dict, headers: bool = True) -> None:
     """Install the bundle on an attached page session; applies to every new
     document (including iframes) from now on.
 
-    Also pins UA/platform/accept-language and the UA-CH client-hint metadata
-    at the CDP layer (Network.setUserAgentOverride) so the HTTP ``User-Agent``
-    and ``Sec-CH-UA*`` headers agree with navigator.* — the gap pure-JS
-    spoofing leaves open.
+    With ``headers`` (default) also pins UA/platform/accept-language and the
+    UA-CH client-hint metadata at the CDP layer (Network.setUserAgentOverride)
+    so the HTTP ``User-Agent`` and ``Sec-CH-UA*`` headers agree with
+    navigator.* — the gap pure-JS spoofing leaves open. Pass ``headers=False``
+    for kernel+overlay mode, where the C++ patches own the identity.
     """
     page_cdp.call("Page.enable")
-    page_cdp.call("Network.enable")
-    page_cdp.call("Network.setUserAgentOverride",
-                  userAgent=params["userAgent"],
-                  acceptLanguage=params["acceptLanguage"],
-                  platform=params["navPlatform"],
-                  userAgentMetadata=params["userAgentMetadata"])
+    if headers:
+        page_cdp.call("Network.enable")
+        page_cdp.call("Network.setUserAgentOverride",
+                      userAgent=params["userAgent"],
+                      acceptLanguage=params["acceptLanguage"],
+                      platform=params["navPlatform"],
+                      userAgentMetadata=params["userAgentMetadata"])
     page_cdp.call("Page.addScriptToEvaluateOnNewDocument",
                   source=build_script(params))

@@ -111,7 +111,9 @@ class TestCanvasAndWebGL:
         assert canvas_for(41) == canvas_for(42)
 
     def test_text_only_canvas_is_not_noised_known_gap(self, make_browser):
-        """Documented kernel gap: text-only canvases are seed-invariant (headless)."""
+        """Documented kernel gap: text-only canvases are seed-invariant
+        (headless). Closed by engine="kernel" + js_overlay=True — see
+        test_js_overlay_closes_text_canvas_gap."""
         def canvas_for(seed):
             b = make_browser(FingerprintProfile(seed=seed))
             with open_probe_page(b) as page:
@@ -123,6 +125,31 @@ class TestCanvasAndWebGL:
                       return c.toDataURL(); })()""")
 
         assert canvas_for(41) == canvas_for(42)
+
+    def test_js_overlay_closes_text_canvas_gap(self, make_browser):
+        """kernel + js_overlay: only the canvas section is injected on top of
+        the C++ patches, so the pure-text canvas the kernel misses is noised
+        per seed while the kernel-owned identity stays untouched."""
+        def canvas_for(seed):
+            b = make_browser(FingerprintProfile(seed=seed), js_overlay=True)
+            with open_probe_page(b) as page:
+                return page.evaluate("""
+                    (() => { const c = document.createElement('canvas');
+                      c.width = 300; c.height = 60;
+                      const x = c.getContext('2d');
+                      x.font = '16px Arial'; x.fillText('veil', 2, 20);
+                      return c.toDataURL(); })()""")
+
+        assert canvas_for(41) != canvas_for(42)
+        assert canvas_for(41) == canvas_for(41)  # bit-stable per seed
+
+    def test_js_overlay_keeps_kernel_identity(self, make_browser):
+        b = make_browser(FingerprintProfile(seed=11, platform="windows"),
+                         js_overlay=True)
+        with open_probe_page(b) as page:
+            r = collect(page)
+        assert r["platform"] == "Win32"
+        assert "Windows NT 10.0" in r["userAgent"]
 
     def test_webgl_gpu_simulated_not_swiftshader(self, probe_page):
         b, page = probe_page(FingerprintProfile(seed=51))

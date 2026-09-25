@@ -189,10 +189,12 @@ class Browser:
         With the JS engine active the fingerprint bundle is installed before
         the first navigation, so it runs at document-start on every frame.
         """
-        if self.engine in ("js", "both"):
+        if self.js_params:
             page = self.devtools.new_page_cdp("about:blank")
             from .inject import install
-            install(page, self.js_params)
+            # kernel+overlay: only the canvas section runs; the kernel's own
+            # UA/headers stay in charge, so no setUserAgentOverride here
+            install(page, self.js_params, headers=self.engine != "kernel")
             # Always navigate: the target's *initial* about:blank document can
             # be swapped after registration, leaving it without the bundle —
             # only a fresh document is guaranteed to run it at document-start.
@@ -276,7 +278,8 @@ def launch(profile: FingerprintProfile | None = None,
            user_data_dir: str | None = None,
            software_webgl: bool | None = None,
            extra_flags: list[str] | None = None,
-           start_timeout: float = 20.0) -> Browser:
+           start_timeout: float = 20.0,
+           js_overlay: bool = False) -> Browser:
     """Start the browser. Blocks until the DevTools endpoint is up.
 
     engine selects where the fingerprint lives:
@@ -284,6 +287,11 @@ def launch(profile: FingerprintProfile | None = None,
                    proof, works on vanilla ungoogled-chromium)
       * "kernel" — fingerprint-chromium's C++ patches
       * "both"   — kernel patches + our bundle on top
+
+    With engine="kernel", ``js_overlay=True`` additionally injects the JS
+    bundle's canvas section only — fingerprint-chromium leaves pure-text
+    canvas readbacks unnoised; the overlay closes that without touching the
+    kernel-owned identity.
 
     A proxy with credentials on the profile is transparently wrapped in a
     local authenticated forwarder (--proxy-server cannot auth).
@@ -311,19 +319,22 @@ def launch(profile: FingerprintProfile | None = None,
         _seed_webrtc_prefs(udd)
 
     js_params = None
-    if engine in ("js", "both"):
+    if engine in ("js", "both") or (engine == "kernel" and js_overlay):
         from .inject import js_params
         # kernel version from the binary path (DevTools reporting it would be
         # too late — the --user-agent switch below must be in the first spawn)
         mver = re.search(r"(\d+\.\d+\.\d+\.\d+)", binary)
         chrome_full = profile.brand_version or (mver.group(1) if mver else None)
         js_params = js_params(profile, chrome_full)
+        if engine == "kernel":  # overlay mode: canvas section only
+            js_params["spoof"] = {k: False for k in js_params["spoof"]}
+            js_params["spoof"]["canvas"] = True
 
     flags = [f"--user-data-dir={udd}",
              "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
              "--disable-sync", "--disable-features=Translate"]
     flags += profile.fingerprint_flags(kernel_fp=kernel_fp)
-    if js_params:
+    if js_params and engine != "kernel":
         # Process-wide HTTP User-Agent: CDP's setUserAgentOverride only covers
         # the attached page session, so worker/subframe fetches would otherwise
         # leak the real (e.g. HeadlessChrome) UA on the wire.
