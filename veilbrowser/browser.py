@@ -25,6 +25,75 @@ from .proxy import LocalForwarder, UpstreamProxy, parse_proxy_url
 _DEVTOOLS_RE = re.compile(r"DevTools listening on (ws://\S+)")
 
 
+class _WorkerScopeInjector(threading.Thread):
+    """Inject the fingerprint bundle into worker/ServiceWorker scopes.
+
+    Page.addScriptToEvaluateOnNewDocument never runs inside workers, and the
+    Worker-constructor wrapper can't reach SharedWorker/ServiceWorker scripts
+    (a SW script must be a same-origin URL). So we auto-attach at the browser
+    level with waitForDebuggerOnStart: every service worker pauses before its
+    script executes, we evaluate the bundle into its fresh JS context, then
+    let it run. Every other target type is resumed immediately.
+    """
+
+    daemon = True
+
+    def __init__(self, browser_ws_url: str, script: str):
+        super().__init__(name="veil-sw-injector")
+        self._ws_url = browser_ws_url
+        self._script = script
+        self._stop = threading.Event()
+
+    def run(self) -> None:
+        import json as _json
+
+        import websocket
+        try:
+            ws = websocket.create_connection(self._ws_url, timeout=5,
+                                             suppress_origin=True)
+        except Exception:
+            return
+        ws.settimeout(0.5)
+        msg_id = [0]
+
+        def call(method: str, params: dict | None = None, session: str | None = None) -> None:
+            msg_id[0] += 1
+            msg = {"id": msg_id[0], "method": method, "params": params or {}}
+            if session:
+                msg["sessionId"] = session
+            try:
+                ws.send(_json.dumps(msg))
+            except Exception:
+                pass
+
+        call("Target.setAutoAttach",
+             {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True})
+        while not self._stop.is_set():
+            try:
+                event = _json.loads(ws.recv())
+            except websocket.WebSocketTimeoutException:
+                continue
+            except Exception:
+                break
+            if event.get("method") != "Target.attachedToTarget":
+                continue
+            session = event["params"]["sessionId"]
+            ttype = event["params"]["targetInfo"]["type"]
+            if ttype in ("service_worker", "shared_worker", "worker"):
+                call("Runtime.enable", session=session)
+                call("Runtime.evaluate",
+                     {"expression": self._script, "includeCommandLineAPI": False},
+                     session=session)
+            call("Runtime.runIfWaitingForDebugger", session=session)
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
 _CONFIG_CANDIDATES = ("/etc/veilbrowser.conf", "~/.veilbrowser.conf")
 
 
@@ -97,6 +166,7 @@ class Browser:
     _forwarder: LocalForwarder | None = None
     _cleanup_dir: bool = False
     _own_procs: list = field(default_factory=list, repr=False)
+    _worker_injector: _WorkerScopeInjector | None = None
 
     @property
     def pid(self) -> int:
@@ -131,6 +201,9 @@ class Browser:
         return self.devtools.new_page_cdp(url)
 
     def stop(self) -> None:
+        if self._worker_injector:
+            self._worker_injector.stop()
+            self._worker_injector = None
         if self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -303,6 +376,15 @@ def launch(profile: FingerprintProfile | None = None,
                 user_data_dir=flags[0].split("=", 1)[1],
                 proxy_arg=proxy_arg,
                 engine=engine, kernel_version=kernel_version, js_params=js_params)
+    if js_params:
+        try:
+            from .inject import build_script
+            bws = str(devtools.version().get("webSocketDebuggerUrl") or "")
+            if bws:
+                b._worker_injector = _WorkerScopeInjector(bws, build_script(js_params))
+                b._worker_injector.start()
+        except Exception:
+            b._worker_injector = None
     b._forwarder = forwarder
     b._cleanup_dir = user_data_dir is None
     atexit.register(b.stop)
