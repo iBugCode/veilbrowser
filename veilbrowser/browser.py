@@ -123,8 +123,10 @@ class Browser:
             page = self.devtools.new_page_cdp("about:blank")
             from .inject import install
             install(page, self.js_params)
-            if url != "about:blank":
-                page.navigate(url)
+            # Always navigate: the target's *initial* about:blank document can
+            # be swapped after registration, leaving it without the bundle —
+            # only a fresh document is guaranteed to run it at document-start.
+            page.navigate(url)
             return page
         return self.devtools.new_page_cdp(url)
 
