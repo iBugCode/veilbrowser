@@ -587,6 +587,34 @@ _SCRIPT_TEMPLATE = r"""
         return origCheck.call(this, font, text);
       }, 'check');
     }
+
+    // FontFace local() probing (creepjs): new FontFace(f, 'local("f")').load()
+    // resolves iff the host really has font f. Rewrite non-whitelisted
+    // local() sources to a name no system provides so the verdict matches
+    // our fonts.check story.
+    if (typeof FontFace !== 'undefined') {
+      const RealFontFace = FontFace;
+      function VeilFontFace(family, source, descriptors) {
+        if (typeof source === 'string') {
+          source = source.replace(
+            /local\(\s*(['"]?)([^'")]*)\1\s*\)/g,
+            (m, q, name) => {
+              const n = String(name).trim().toLowerCase();
+              if (GENERIC.has(n) || allowedFonts.has(n)) return m;
+              return "local('__veil_not_installed__')";
+            });
+        }
+        return Reflect.construct(RealFontFace, [family, source, descriptors]);
+      }
+      VeilFontFace.prototype = RealFontFace.prototype;
+      markNative(VeilFontFace, 'FontFace');
+      try {
+        Object.defineProperty(scope, 'FontFace',
+          {value: VeilFontFace, writable: true, configurable: true});
+        Object.defineProperty(RealFontFace.prototype, 'constructor',
+          {value: VeilFontFace, writable: true, configurable: true});
+      } catch (e) {}
+    }
   }
 
   // ---- client rects (main thread only) -----------------------------------
