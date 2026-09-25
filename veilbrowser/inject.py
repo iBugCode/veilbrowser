@@ -196,8 +196,17 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
     sw, sh = r_scr.choice(_SCREENS[resolved.platform])
     taskbar = r_scr.choice((40, 48, 60, 72)) if resolved.platform == "windows" \
         else r_scr.choice((24, 25, 38))
+    # Maximized-window story coherent with the fingerprint screen: JS-visible
+    # window metrics never show the host's real window — that stays available
+    # to the operator via screen.__width/__height (CloakBrowser-style).
+    ui_h = r_scr.choice((79, 87, 95, 108, 124))
+    side = 8 if resolved.platform == "windows" else 0
     screen = {"w": sw, "h": sh, "availW": sw, "availH": sh - taskbar,
-              "cd": r_scr.choice((24, 30)), "pd": 24}
+              "cd": r_scr.choice((24, 30)), "pd": 24,
+              "innerW": sw, "innerH": sh - taskbar - ui_h,
+              "outerW": sw + 2 * side, "outerH": sh - taskbar + side,
+              "scrX": -side, "scrY": -side,
+              "dpr": 2 if resolved.platform == "macos" else 1}
 
     r_dev = rng("devices")
     devices = []
@@ -297,6 +306,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
             "ua": True, "tz": True, "canvas": True, "rects": True,
             "audio": True, "webgl": True, "plugins": True, "shadow": True,
             "screen": True, "media": True, "worker": True, "fonts": True,
+            "env": True,
             "audioRate": True, "battery": True, "speech": True, "storage": True,
         },
         "automation": True,
@@ -1109,6 +1119,24 @@ _SCRIPT_TEMPLATE = r"""
   if (cfg.spoof.screen && !isWorker) {
     const s = cfg.screen;
     const scr = window.screen, scrProto = Screen.prototype;
+    // Real host window size (CloakBrowser-style operator escape hatch: page
+    // JS sees only the fingerprint). Captured lazily via the native getters —
+    // at document-start the fresh document's window metrics aren't final,
+    // and this keeps tracking resizes.
+    const origWinOW = Object.getOwnPropertyDescriptor(window, 'outerWidth');
+    const origWinOH = Object.getOwnPropertyDescriptor(window, 'outerHeight');
+    const origScrW = Object.getOwnPropertyDescriptor(scrProto, 'width');
+    const origScrH = Object.getOwnPropertyDescriptor(scrProto, 'height');
+    try {
+      Object.defineProperty(scr, '__width', {get: function __width() {
+        const v = origWinOW ? origWinOW.get.call(window) : 0;
+        return v || (origScrW ? origScrW.get.call(scr) : 0);
+      }, enumerable: false, configurable: true});
+      Object.defineProperty(scr, '__height', {get: function __height() {
+        const v = origWinOH ? origWinOH.get.call(window) : 0;
+        return v || (origScrH ? origScrH.get.call(scr) : 0);
+      }, enumerable: false, configurable: true});
+    } catch (e) {}
     ['width', 'availWidth'].forEach(p => {
       redefine(scr, p, () => s.w); redefine(scrProto, p, () => s.w);
     });
@@ -1118,11 +1146,54 @@ _SCRIPT_TEMPLATE = r"""
     ['availHeight'].forEach(p => {
       redefine(scr, p, () => s.availH); redefine(scrProto, p, () => s.availH);
     });
+    ['availLeft', 'availTop'].forEach(p => {
+      redefine(scr, p, () => 0); redefine(scrProto, p, () => 0);
+    });
     ['colorDepth', 'pixelDepth'].forEach(p => {
       redefine(scr, p, () => s.cd); redefine(scrProto, p, () => s.cd);
     });
-    redefine(window, 'outerWidth', () => s.w);
-    redefine(window, 'outerHeight', () => s.h);
+    redefine(window, 'outerWidth', () => s.outerW);
+    redefine(window, 'outerHeight', () => s.outerH);
+    redefine(window, 'innerWidth', () => s.innerW);
+    redefine(window, 'innerHeight', () => s.innerH);
+    redefine(window, 'devicePixelRatio', () => s.dpr);
+    ['screenX', 'screenLeft'].forEach(p => redefine(window, p, () => s.scrX));
+    ['screenY', 'screenTop'].forEach(p => redefine(window, p, () => s.scrY));
+    if (window.visualViewport) {
+      const vv = window.visualViewport;
+      redefine(vv, 'width', () => s.innerW);
+      redefine(vv, 'height', () => s.innerH);
+    }
+  }
+
+  // ---- headless env masking (main thread only) ---------------------------
+  // headless=new still leaks a few C++-level behaviors no UA override
+  // reaches; report whatever a headful browser on this platform would.
+  if (cfg.spoof.env && !isWorker) {
+    if (typeof Notification !== 'undefined') {
+      redefine(Notification, 'permission', () => 'default');
+    }
+    if (navigator.permissions && navigator.permissions.query) {
+      const origQuery = navigator.permissions.query;
+      navigator.permissions.query = markNative(function query(desc) {
+        const p = origQuery.call(this, desc);
+        if (desc && desc.name === 'notifications') {
+          return p.then(st => {
+            if (st.state === 'denied') {
+              return Object.create(Object.getPrototypeOf(st), {
+                state: {value: 'prompt', enumerable: true, configurable: true},
+                onchange: {value: null, writable: true, enumerable: true,
+                           configurable: true},
+              });
+            }
+            return st;
+          });
+        }
+        return p;
+      }, 'query');
+    }
+    redefFn(document, 'hasFocus',
+            markNative(function hasFocus() { return true; }, 'hasFocus'));
   }
 
   // ---- media devices ------------------------------------------------------

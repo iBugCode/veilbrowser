@@ -473,7 +473,63 @@ class TestJsEngineCoherence:
             "[screen.width, screen.height, screen.availWidth, screen.availHeight,"
             "window.outerWidth, window.outerHeight, screen.colorDepth]")
         s = params["screen"]
-        assert got == [s["w"], s["h"], s["availW"], s["availH"], s["w"], s["h"], s["cd"]]
+        assert got == [s["w"], s["h"], s["availW"], s["availH"],
+                       s["outerW"], s["outerH"], s["cd"]]
+
+    def test_window_metrics_coherent_maximized(self, js_probe_page):
+        """Full window story: maximized on the fingerprint screen, with a
+        human-sized browser chrome between outer and inner."""
+        prof = _resolved(81, platform="windows")
+        s = js_params(prof)["screen"]
+        b, page = js_probe_page(prof)
+        got = page.evaluate(
+            "[window.innerWidth, window.innerHeight, window.screenX, window.screenY,"
+            "window.screenLeft, window.screenTop, screen.availLeft, screen.availTop,"
+            "window.visualViewport.width, window.visualViewport.height,"
+            "window.devicePixelRatio]")
+        assert got == [s["innerW"], s["innerH"], s["scrX"], s["scrY"],
+                       s["scrX"], s["scrY"], 0, 0,
+                       s["innerW"], s["innerH"], s["dpr"]]
+        assert s["outerW"] - s["innerW"] <= 16   # maximized side borders only
+        assert 0 < s["outerH"] - s["innerH"] <= 140
+        assert s["innerW"] <= s["availW"] and s["innerH"] < s["availH"]
+
+    def test_macos_dpr_two(self, js_probe_page):
+        prof = _resolved(83, platform="macos")
+        assert js_params(prof)["screen"]["dpr"] == 2
+        b, page = js_probe_page(prof)
+        assert page.evaluate("window.devicePixelRatio") == 2
+
+    def test_screen_real_size_exposed_to_operator(self, make_js_browser):
+        """CloakBrowser-style: page JS sees the fingerprint screen, the real
+        host window size stays on screen.__width/__height."""
+        prof = _resolved(91, platform="windows")
+        params = js_params(prof)
+        b = make_js_browser(prof, extra_flags=["--window-size=1024,800"])
+        try:
+            page = b.new_page()
+            got = page.evaluate(
+                "[screen.width, screen.height, screen.__width, screen.__height]")
+            assert got[0] == params["screen"]["w"]
+            assert got[1] == params["screen"]["h"]
+            assert got[2] == 1024 and got[3] == 800
+            assert got[2] != got[0]
+            # non-enumerable: doesn't show up in a props scan of screen
+            assert page.evaluate("Object.keys(screen).includes('__width')") is False
+        finally:
+            b.stop()
+
+    def test_headless_env_masked(self, js_probe_page):
+        """headless=new leaks: Notification/permissions 'denied' and
+        document.hasFocus() false — all headful values now."""
+        prof = _resolved(95)
+        b, page = js_probe_page(prof)
+        got = page.evaluate(
+            "Promise.all(["
+            "  (typeof Notification !== 'undefined' ? Notification.permission : null),"
+            "  navigator.permissions.query({name: 'notifications'}).then(s => s.state),"
+            "  document.hasFocus()])", await_promise=True)
+        assert got == ["default", "prompt", True]
 
     def test_screen_seed_dependent(self, js_probe_page):
         widths = set()
