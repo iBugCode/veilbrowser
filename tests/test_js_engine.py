@@ -109,8 +109,13 @@ class TestJsEngineIdentity:
         assert native
         protoGetter = page.evaluate(
             "(() => { try { return Navigator.prototype.userAgent; } "
-            "catch (e) { return 'ERR:' + e; } })()")
-        assert protoGetter.startswith("Mozilla/5.0")
+            "catch (e) { return 'ERR:' + e.constructor.name; } })()")
+        # real Chrome: reading the getter against the prototype throws
+        assert protoGetter == "ERR:TypeError", protoGetter
+        # cross-brand read still works (receiver is a Navigator instance)
+        assert page.evaluate(
+            "Object.getOwnPropertyDescriptor(Navigator.prototype,'userAgent')"
+            ".get.call(navigator)").startswith("Mozilla/5.0")
 
     def test_concurrency_and_memory(self, js_probe_page):
         prof = _resolved(77, platform="windows", hardware_concurrency=4)
@@ -535,6 +540,58 @@ class TestJsEngineCoherence:
             "  navigator.permissions.query({name: 'notifications'}).then(s => s.state),"
             "  document.hasFocus()])", await_promise=True)
         assert got == ["default", "prompt", True]
+
+    def test_headless_feature_presence(self, make_js_browser):
+        """Web Share + ContentIndex/ContactsManager/downlinkMax: headed
+        Chrome ships them, headless doesn't — absence is a headless tell."""
+        prof = _resolved(96, platform="windows")
+        b = make_js_browser(prof)
+        try:
+            page = b.new_page()
+            got = page.evaluate(
+                "['share' in navigator, 'canShare' in navigator,"
+                " 'ContentIndex' in window, 'ContactsManager' in window,"
+                " 'downlinkMax' in NetworkInformation.prototype,"
+                " typeof navigator.share, navigator.share.toString()]")
+            assert got[:5] == [True, True, True, True, True]
+            assert got[5] == "function"
+            assert got[6] == "function share() { [native code] }"
+        finally:
+            b.stop()
+
+    def test_system_color_active_text_mapped(self, js_probe_page):
+        """Headless has no OS theme: ActiveText computes to red garbage —
+        mapped to the Windows palette the fingerprint claims."""
+        prof = _resolved(97)
+        b, page = js_probe_page(prof)
+        got = page.evaluate("""
+          (() => {
+            const el = document.createElement('div');
+            el.setAttribute('style', 'background-color: ActiveText');
+            document.body.appendChild(el);
+            const cs = getComputedStyle(el);
+            const r = [cs.backgroundColor, cs.getPropertyValue('background-color')];
+            document.body.removeChild(el);
+            return r;
+          })()
+        """)
+        assert got == ["rgb(0, 0, 255)", "rgb(0, 0, 255)"]
+
+    def test_color_scheme_dark_matches(self, make_js_browser):
+        from veilbrowser.profile import FingerprintProfile as FP
+        seed = next(s for s in range(200)
+                    if js_params(FP(seed=s).resolved())["colorScheme"] == "dark")
+        prof = _resolved(seed, platform="windows")
+        assert js_params(prof)["colorScheme"] == "dark"
+        b = make_js_browser(prof)
+        try:
+            page = b.new_page()
+            assert page.evaluate(
+                "matchMedia('(prefers-color-scheme: dark)').matches") is True
+            assert page.evaluate(
+                "matchMedia('(prefers-color-scheme: light)').matches") is False
+        finally:
+            b.stop()
 
     def test_screen_seed_dependent(self, js_probe_page):
         widths = set()

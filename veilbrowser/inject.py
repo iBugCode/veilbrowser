@@ -233,6 +233,9 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
     else:
         geolocation = None
 
+    r_cs = rng("colorscheme")
+    color_scheme = r_cs.choice(("light", "light", "dark"))
+
     r_bat = rng("battery")
     charging = r_bat.random() < 0.5
     level = round(r_bat.uniform(0.15, 1.0), 2)
@@ -282,6 +285,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
         "storage": storage,
         "geolocation": geolocation,
         "webrtcIp": resolved.webrtc_ip,
+        "colorScheme": color_scheme,
         "fonts": list(_FONT_POOLS[resolved.platform]),
         "userAgentMetadata": {
             "brands": [{"brand": b["brand"].split(";")[0], "version": b["version"]}
@@ -339,22 +343,70 @@ _SCRIPT_TEMPLATE = r"""
   }
   const nativeFns = new Map();
   const origFnToString = Function.prototype.toString;
+  // Cross-realm toString: tools run lie checks from nested same-origin
+  // iframes, so one realm's toString hook must recognize wrappers registered
+  // by ANOTHER realm's bundle instance (Function.toString is per-realm, but
+  // the native it falls back to is universal). Every realm publishes a
+  // lookup; a miss walks up the frame chain before falling back.
+  try { Object.defineProperty(scope, '__veil_lookup',
+    {value: (fn) => nativeFns.get(fn), enumerable: false, configurable: true}); } catch (e) {}
+  function lookupNative(fn) {
+    if (nativeFns.has(fn)) return nativeFns.get(fn);
+    let w = null;
+    try { w = scope.parent; } catch (e) { return undefined; }
+    for (let hops = 0; w && w !== scope && hops < 6; hops++) {
+      try {
+        const up = w.__veil_lookup;
+        if (up) {
+          const n = up(fn);
+          if (n !== undefined) return n;
+        }
+        if (w === w.parent) break;
+        w = w.parent;
+      } catch (e) { return undefined; }  // cross-origin: stop walking
+    }
+    return undefined;
+  }
   function markNative(fn, name) {
     nativeFns.set(fn, name || fn.name);
     try { Object.defineProperty(fn, 'name', {value: name || fn.name, configurable: true}); } catch (e) {}
     return fn;
   }
-  Function.prototype.toString = markNative(function toString() {
-    if (nativeFns.has(this)) return 'function ' + nativeFns.get(this) + '() { [native code] }';
+  function nativeMethod(fn, name) {
+    // Native interface methods are non-constructible and have no .prototype
+    // property; a plain function wrapper leaks both (creepjs 'failed new
+    // instance error' / 'failed "prototype" in function' lie checks). Re-home
+    // the implementation on a method-shorthand holder to inherit that shape.
+    const holder = { m(...args) { return fn.apply(this, args); } };
+    return markNative(holder.m, name || fn.name);
+  }
+  Function.prototype.toString = nativeMethod(function toString() {
+    const n = lookupNative(this);
+    if (n !== undefined) return 'function ' + n + '() { [native code] }';
     return origFnToString.call(this);
   }, 'toString');
   function redefine(obj, prop, getter, setter) {
     let enumerable = true, have = null;
     try { have = Object.getOwnPropertyDescriptor(obj, prop); } catch (e) {}
     if (have) enumerable = have.enumerable;
+    // Native accessors brand-check the receiver: calling the getter against
+    // the prototype (Object.getOwnPropertyDescriptor(...).get.call(proto),
+    // creepjs 'failed illegal error') throws Illegal invocation — and if it
+    // doesn't, the property reads as an own instance value, which is a second
+    // lie. Enforce both: prototype patches accept only interface instances,
+    // instance patches only the home object (or same-interface instances).
+    const home = obj;
+    const ctor = home && home.constructor;
+    const isProto = !!ctor && ctor.prototype === home;
+    const holder = { get() {
+      const ok = isProto ? (this instanceof ctor)
+        : (this === home || (ctor && this instanceof ctor));
+      if (!ok) throw new TypeError('Illegal invocation');
+      return getter.call(this);
+    } };
     try {
       Object.defineProperty(obj, prop, {
-        get: markNative(getter, 'get ' + prop),
+        get: markNative(holder.get, 'get ' + prop),
         set: setter, configurable: true, enumerable: enumerable,
       });
     } catch (e) {}
@@ -372,26 +424,22 @@ _SCRIPT_TEMPLATE = r"""
 
   // ---- navigator ---------------------------------------------------------
   if (cfg.spoof.ua) {
-    // window: Navigator.prototype — worker: WorkerNavigator.prototype
+    // window: Navigator.prototype — worker: WorkerNavigator.prototype.
+    // Real-Chrome shape only: accessors live on the prototype, never as own
+    // instance properties (own descriptors on navigator/screen are a
+    // creepjs 'failed undefined properties' lie).
     const proto = Object.getPrototypeOf(navigator);
-    redefine(navigator, 'userAgent', () => cfg.userAgent);
     redefine(proto, 'userAgent', () => cfg.userAgent);
-    redefine(navigator, 'appVersion', () => cfg.userAgent.replace(/^Mozilla\//, ''));
     redefine(proto, 'appVersion', () => cfg.userAgent.replace(/^Mozilla\//, ''));
-    redefine(navigator, 'platform', () => cfg.navPlatform);
     redefine(proto, 'platform', () => cfg.navPlatform);
     // real-Chrome shape: webdriver is a prototype accessor returning false,
     // NOT an own property — own-key probes (lodash _.has) flag the instance
     // property even when its value is undefined.
     redefine(proto, 'webdriver', () => false);
-    redefine(navigator, 'hardwareConcurrency', () => cfg.hardwareConcurrency);
     redefine(proto, 'hardwareConcurrency', () => cfg.hardwareConcurrency);
-    redefine(navigator, 'deviceMemory', () => cfg.deviceMemory);
     redefine(proto, 'deviceMemory', () => cfg.deviceMemory);
     const langs = Object.freeze(cfg.languages.slice());
-    redefine(navigator, 'languages', () => langs);
     redefine(proto, 'languages', () => langs);
-    redefine(navigator, 'language', () => langs[0]);
     redefine(proto, 'language', () => langs[0]);
 
     // UA-CH
@@ -399,11 +447,11 @@ _SCRIPT_TEMPLATE = r"""
       brands: cfg.brands.map(b => ({brand: b.brand.split(';')[0], version: b.version})),
       mobile: false,
       platform: cfg.uachPlatform,
-      toJSON: markNative(function toJSON() {
+      toJSON: nativeMethod(function toJSON() {
         return {brands: this.brands, mobile: this.mobile, platform: this.platform};
       }, 'toJSON'),
     };
-    uaData.getHighEntropyValues = markNative(function getHighEntropyValues(hints) {
+    uaData.getHighEntropyValues = nativeMethod(function getHighEntropyValues(hints) {
       return Promise.resolve().then(() => {
         const out = {mobile: uaData.mobile, platform: uaData.platform, model: ''};
         (hints || []).forEach(h => {
@@ -418,7 +466,6 @@ _SCRIPT_TEMPLATE = r"""
         return out;
       });
     }, 'getHighEntropyValues');
-    redefine(navigator, 'userAgentData', () => uaData);
     redefine(proto, 'userAgentData', () => uaData);
 
     if (cfg.spoof.plugins && typeof PluginArray !== 'undefined') {
@@ -447,8 +494,8 @@ _SCRIPT_TEMPLATE = r"""
           Object.defineProperty(p, String(j), {value: mt});
           if (i === 0) { mimeList.push(mt); Object.defineProperty(mimeArr, String(j), {value: mt}); }
         });
-        p.item = markNative(function item(i2) { return this[String(i2)] || null; }, 'item');
-        p.namedItem = markNative(function namedItem(n) { return this[n] || null; }, 'namedItem');
+        p.item = nativeMethod(function item(i2) { return this[String(i2)] || null; }, 'item');
+        p.namedItem = nativeMethod(function namedItem(n) { return this[n] || null; }, 'namedItem');
         pluginList.push(p);
         Object.defineProperty(pluginArr, String(i), {value: p});
         Object.defineProperty(pluginArr, name, {value: p});
@@ -457,21 +504,18 @@ _SCRIPT_TEMPLATE = r"""
       // WebIDL accessor on the prototype, so define own properties explicitly
       Object.defineProperty(pluginArr, 'length',
         {value: pluginList.length, writable: true, configurable: true, enumerable: true});
-      pluginArr.item = markNative(function item(i2) { return pluginList[i2] || null; }, 'item');
-      pluginArr.namedItem = markNative(function namedItem(n) { return pluginArr[n] || null; }, 'namedItem');
-      pluginArr[Symbol.iterator] = markNative(function* () { yield* pluginList; }, '[Symbol.iterator]');
+      pluginArr.item = nativeMethod(function item(i2) { return pluginList[i2] || null; }, 'item');
+      pluginArr.namedItem = nativeMethod(function namedItem(n) { return pluginArr[n] || null; }, 'namedItem');
+      pluginArr[Symbol.iterator] = nativeMethod(function* () { yield* pluginList; }, '[Symbol.iterator]');
       Object.defineProperty(mimeArr, 'length',
         {value: mimeList.length, writable: true, configurable: true, enumerable: true});
-      mimeArr.item = markNative(function item(i2) { return mimeList[i2] || null; }, 'item');
-      mimeArr.namedItem = markNative(function namedItem(n) {
+      mimeArr.item = nativeMethod(function item(i2) { return mimeList[i2] || null; }, 'item');
+      mimeArr.namedItem = nativeMethod(function namedItem(n) {
         return mimeList.find(m => m.type === n) || null;
       }, 'namedItem');
-      mimeArr[Symbol.iterator] = markNative(function* () { yield* mimeList; }, '[Symbol.iterator]');
-      redefine(navigator, 'plugins', () => pluginArr);
+      mimeArr[Symbol.iterator] = nativeMethod(function* () { yield* mimeList; }, '[Symbol.iterator]');
       redefine(proto, 'plugins', () => pluginArr);
-      redefine(navigator, 'mimeTypes', () => mimeArr);
       redefine(proto, 'mimeTypes', () => mimeArr);
-      redefine(navigator, 'pdfViewerEnabled', () => true);
       redefine(proto, 'pdfViewerEnabled', () => true);
     }
   }
@@ -490,7 +534,7 @@ _SCRIPT_TEMPLATE = r"""
       } catch (e) { return 0; }
     }
     // getTimezoneOffset: minutes *west* of UTC
-    redefFn(Date.prototype, 'getTimezoneOffset', markNative(
+    redefFn(Date.prototype, 'getTimezoneOffset', nativeMethod(
       function getTimezoneOffset() { return offsetMinutes(this); }, 'getTimezoneOffset'));
 
     // Intl.DateTimeFormat: inject our tz when the caller didn't pin one
@@ -510,7 +554,7 @@ _SCRIPT_TEMPLATE = r"""
     markNative(VeilDTF, 'DateTimeFormat');
     try { Object.defineProperty(Intl, 'DateTimeFormat',
       {value: VeilDTF, writable: true, configurable: true}); } catch (e) {}
-    Intl.DateTimeFormat.prototype.resolvedOptions = markNative(function resolvedOptions() {
+    Intl.DateTimeFormat.prototype.resolvedOptions = nativeMethod(function resolvedOptions() {
       const r = realRO.call(this);
       if (pinned.has(this) && !pinned.get(this)) r.timeZone = cfg.timezone;
       return r;
@@ -518,7 +562,7 @@ _SCRIPT_TEMPLATE = r"""
 
     // Date.prototype.toString tail: "GMT-04:00" -> "GMT-0400 (Name)"
     const origToString = Date.prototype.toString;
-    redefFn(Date.prototype, 'toString', markNative(function toString() {
+    redefFn(Date.prototype, 'toString', nativeMethod(function toString() {
       const s = origToString.call(this);
       const off = -offsetMinutes(this);
       const sign = off < 0 ? '-' : '+';
@@ -532,7 +576,7 @@ _SCRIPT_TEMPLATE = r"""
     // toLocale*String honour our tz explicitly
     ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'].forEach(m => {
       const orig = Date.prototype[m];
-      redefFn(Date.prototype, m, markNative(function (locales, options) {
+      redefFn(Date.prototype, m, nativeMethod(function (locales, options) {
         const o = Object.assign({}, options || {}, {timeZone: cfg.timezone});
         try { return orig.call(this, locales || cfg.languages[0], o); }
         catch (e) { return orig.call(this, locales, options); }
@@ -544,7 +588,7 @@ _SCRIPT_TEMPLATE = r"""
     localFields.forEach(f => {
       const orig = Date.prototype['get' + f];
       const utcGet = Date.prototype['getUTC' + f];
-      redefFn(Date.prototype, 'get' + f, markNative(function () {
+      redefFn(Date.prototype, 'get' + f, nativeMethod(function () {
         const shifted = new RealDate(this.getTime() - offsetMinutes(this) * 60000);
         return utcGet.call(shifted);
       }, 'get' + f));
@@ -590,12 +634,12 @@ _SCRIPT_TEMPLATE = r"""
       return imageData;
     }
     const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-    CanvasRenderingContext2D.prototype.getImageData = markNative(function getImageData() {
+    CanvasRenderingContext2D.prototype.getImageData = nativeMethod(function getImageData() {
       const id = origGetImageData.apply(this, arguments);
       return noisedImageData(this, id, cfg.seed);
     }, 'getImageData');
     const origGetImageData2 = OffscreenCanvasRenderingContext2D.prototype.getImageData;
-    OffscreenCanvasRenderingContext2D.prototype.getImageData = markNative(function getImageData() {
+    OffscreenCanvasRenderingContext2D.prototype.getImageData = nativeMethod(function getImageData() {
       const id = origGetImageData2.apply(this, arguments);
       return noisedImageData(this, id, cfg.seed);
     }, 'getImageData');
@@ -610,17 +654,17 @@ _SCRIPT_TEMPLATE = r"""
       return c2;
     }
     const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = markNative(function toDataURL() {
+    HTMLCanvasElement.prototype.toDataURL = nativeMethod(function toDataURL() {
       try { return origToDataURL.apply(redrawingClone(this), arguments); }
       catch (e) { return origToDataURL.apply(this, arguments); }
     }, 'toDataURL');
     const origToBlob = HTMLCanvasElement.prototype.toBlob;
-    HTMLCanvasElement.prototype.toBlob = markNative(function toBlob(cb, type, q) {
+    HTMLCanvasElement.prototype.toBlob = nativeMethod(function toBlob(cb, type, q) {
       try { return origToBlob.call(redrawingClone(this), cb, type, q); }
       catch (e) { return origToBlob.call(this, cb, type, q); }
     }, 'toBlob');
     const origConvertToBlob = OffscreenCanvas.prototype.convertToBlob;
-    OffscreenCanvas.prototype.convertToBlob = markNative(function convertToBlob(opts) {
+    OffscreenCanvas.prototype.convertToBlob = nativeMethod(function convertToBlob(opts) {
       try {
         const c2 = document.createElement('canvas');
         c2.width = this.width; c2.height = this.height;
@@ -666,7 +710,7 @@ _SCRIPT_TEMPLATE = r"""
       return String(font).slice(0, String(font).length - m[1].length) + 'sans-serif';
     }
     const origMeasure = CanvasRenderingContext2D.prototype.measureText;
-    CanvasRenderingContext2D.prototype.measureText = markNative(function measureText(text) {
+    CanvasRenderingContext2D.prototype.measureText = nativeMethod(function measureText(text) {
       let out;
       if (familiesAllowed(familiesOf(this.font))) {
         out = origMeasure.call(this, text);
@@ -687,7 +731,7 @@ _SCRIPT_TEMPLATE = r"""
 
     if (typeof FontFaceSet !== 'undefined' && document.fonts) {
       const origCheck = FontFaceSet.prototype.check;
-      FontFaceSet.prototype.check = markNative(function check(font, text) {
+      FontFaceSet.prototype.check = nativeMethod(function check(font, text) {
         try {
           const fams = familiesOf(font);
           if (fams.length) {
@@ -741,11 +785,11 @@ _SCRIPT_TEMPLATE = r"""
       return new DOMRect(rect.x + dx, rect.y + dx, rect.width + dx, rect.height + dx);
     }
     const origGBR = Element.prototype.getBoundingClientRect;
-    Element.prototype.getBoundingClientRect = markNative(function getBoundingClientRect() {
+    Element.prototype.getBoundingClientRect = nativeMethod(function getBoundingClientRect() {
       return adjust(origGBR.call(this), this);
     }, 'getBoundingClientRect');
     const origGCR = Element.prototype.getClientRects;
-    Element.prototype.getClientRects = markNative(function getClientRects() {
+    Element.prototype.getClientRects = nativeMethod(function getClientRects() {
       const list = origGCR.call(this);
       const out = [];
       for (let i = 0; i < list.length; i++) out.push(adjust(list[i], this));
@@ -755,8 +799,8 @@ _SCRIPT_TEMPLATE = r"""
           {value: out[i], writable: true, configurable: true, enumerable: true});
       Object.defineProperty(wrapped, 'length',
         {value: out.length, writable: true, configurable: true, enumerable: true});
-      wrapped.item = markNative(function item(i2) { return out[i2] || null; }, 'item');
-      wrapped[Symbol.iterator] = markNative(function* () { yield* out; }, '[Symbol.iterator]');
+      wrapped.item = nativeMethod(function item(i2) { return out[i2] || null; }, 'item');
+      wrapped[Symbol.iterator] = nativeMethod(function* () { yield* out; }, '[Symbol.iterator]');
       return wrapped;
     }, 'getClientRects');
   }
@@ -774,11 +818,11 @@ _SCRIPT_TEMPLATE = r"""
       return out;
     }
     const origStart = OfflineAudioContext.prototype.startRendering;
-    OfflineAudioContext.prototype.startRendering = markNative(function startRendering() {
+    OfflineAudioContext.prototype.startRendering = nativeMethod(function startRendering() {
       return origStart.call(this).then(buf => jitterBuffer(buf, this));
     }, 'startRendering');
     const origGetFloat = AnalyserNode.prototype.getFloatFrequencyData;
-    AnalyserNode.prototype.getFloatFrequencyData = markNative(function getFloatFrequencyData(arr) {
+    AnalyserNode.prototype.getFloatFrequencyData = nativeMethod(function getFloatFrequencyData(arr) {
       origGetFloat.call(this, arr);
       const r = prng(hash32('analyser' + arr.length, cfg.seed));
       for (let i = 0; i < arr.length; i++) arr[i] += (r() - 0.5) * 1e-4;
@@ -867,11 +911,10 @@ _SCRIPT_TEMPLATE = r"""
     }
     const bmInst = Object.create(BatteryManager.prototype);
     const navProto = Object.getPrototypeOf(navigator);
-    const stub = markNative(function getBattery() {
+    // real shape: a method on Navigator.prototype returning the manager
+    redefFn(navProto, 'getBattery', nativeMethod(function getBattery() {
       return Promise.resolve(bmInst);
-    }, 'getBattery');
-    redefine(navigator, 'getBattery', () => stub);
-    redefine(navProto, 'getBattery', () => stub);
+    }, 'getBattery'));
   }
 
   // ---- speech synthesis ----------------------------------------------------
@@ -887,7 +930,7 @@ _SCRIPT_TEMPLATE = r"""
     });
     redefine(SpeechSynthesis.prototype, 'voices', () => voices.slice());
     redefFn(SpeechSynthesis.prototype, 'getVoices',
-      markNative(function getVoices() { return voices; }, 'getVoices'));
+      nativeMethod(function getVoices() { return voices; }, 'getVoices'));
   }
 
   // ---- storage quota --------------------------------------------------------
@@ -897,7 +940,7 @@ _SCRIPT_TEMPLATE = r"""
   if (cfg.spoof.storage && typeof StorageManager !== 'undefined' &&
       navigator.storage) {
     const s = cfg.storage;
-    redefFn(StorageManager.prototype, 'estimate', markNative(function estimate() {
+    redefFn(StorageManager.prototype, 'estimate', nativeMethod(function estimate() {
       return Promise.resolve({usage: s.usage, quota: s.quota});
     }, 'estimate'));
   }
@@ -926,18 +969,18 @@ _SCRIPT_TEMPLATE = r"""
       });
       return pos;
     }
-    redefFn(Geolocation.prototype, 'getCurrentPosition', markNative(
+    redefFn(Geolocation.prototype, 'getCurrentPosition', nativeMethod(
       function getCurrentPosition(success, error, options) {
         setTimeout(() => { try { success(makePosition()); } catch (e) {} }, 30);
       }, 'getCurrentPosition'));
     let watchId = 0;
-    redefFn(Geolocation.prototype, 'watchPosition', markNative(
+    redefFn(Geolocation.prototype, 'watchPosition', nativeMethod(
       function watchPosition(success, error, options) {
         watchId += 1;
         setTimeout(() => { try { success(makePosition()); } catch (e) {} }, 30);
         return watchId;
       }, 'watchPosition'));
-    redefFn(Geolocation.prototype, 'clearWatch', markNative(
+    redefFn(Geolocation.prototype, 'clearWatch', nativeMethod(
       function clearWatch(id) {}, 'clearWatch'));
   }
 
@@ -970,13 +1013,13 @@ _SCRIPT_TEMPLATE = r"""
       }
       return desc;
     }
-    redefFn(NativePC, 'createOffer', markNative(function createOffer(...a) {
+    redefFn(NativePC, 'createOffer', nativeMethod(function createOffer(...a) {
       return origOfferFn.apply(this, a).then(mungedDesc);
     }, 'createOffer'));
-    redefFn(NativePC, 'createAnswer', markNative(function createAnswer(...a) {
+    redefFn(NativePC, 'createAnswer', nativeMethod(function createAnswer(...a) {
       return origAnswerFn.apply(this, a).then(mungedDesc);
     }, 'createAnswer'));
-    redefFn(NativePC, 'setLocalDescription', markNative(function setLocalDescription(desc, ...a) {
+    redefFn(NativePC, 'setLocalDescription', nativeMethod(function setLocalDescription(desc, ...a) {
       return origSetLocal.call(this, mungedDesc(desc), ...a);
     }, 'setLocalDescription'));
     // candidate events: swap in a real RTCIceCandidate carrying the exit IP
@@ -1001,7 +1044,7 @@ _SCRIPT_TEMPLATE = r"""
       };
     }
     const origAEL = NativePC.addEventListener;
-    redefFn(NativePC, 'addEventListener', markNative(function addEventListener(type, fn, opts) {
+    redefFn(NativePC, 'addEventListener', nativeMethod(function addEventListener(type, fn, opts) {
       return origAEL.call(this, type, type === 'icecandidate' && typeof fn === 'function'
         ? wrapListener(fn) : fn, opts);
     }, 'addEventListener'));
@@ -1009,9 +1052,9 @@ _SCRIPT_TEMPLATE = r"""
     const origOn = Object.getOwnPropertyDescriptor(NativePC, ON_KEY);
     if (origOn && origOn.set) {
       Object.defineProperty(NativePC, ON_KEY, {
-        get: markNative(function onicecandidate() { return origOn.get.call(this); },
+        get: nativeMethod(function onicecandidate() { return origOn.get.call(this); },
                        'get onicecandidate'),
-        set: markNative(function onicecandidate(fn) {
+        set: nativeMethod(function onicecandidate(fn) {
           origOn.set.call(this, typeof fn === 'function' ? wrapListener(fn) : fn);
         }, 'set onicecandidate'),
         configurable: true, enumerable: origOn.enumerable,
@@ -1065,13 +1108,13 @@ _SCRIPT_TEMPLATE = r"""
                      Ctor === WebGL2RenderingContext);
       const allow = isGL2 ? CHROME_EXT2 : CHROME_EXT1;
       const origGSE = Ctor.prototype.getSupportedExtensions;
-      redefFn(Ctor.prototype, 'getSupportedExtensions', markNative(
+      redefFn(Ctor.prototype, 'getSupportedExtensions', nativeMethod(
         function getSupportedExtensions() {
           const real = origGSE.call(this) || [];
           return real.filter(e => allow.has(e));
         }, 'getSupportedExtensions'));
       const origGP = Ctor.prototype.getParameter;
-      Ctor.prototype.getParameter = markNative(function getParameter(p) {
+      Ctor.prototype.getParameter = nativeMethod(function getParameter(p) {
         if (p === UNMASKED_VENDOR) return cfg.webglVendor;
         if (p === UNMASKED_RENDERER) return cfg.webglRenderer;
         if (p === VERSION) return 'WebGL 2.0 (OpenGL ES 3.0 Chromium)';
@@ -1079,7 +1122,7 @@ _SCRIPT_TEMPLATE = r"""
       }, 'getParameter');
       const origRP = Ctor.prototype.readPixels;
       if (origRP) {
-        Ctor.prototype.readPixels = markNative(function readPixels() {
+        Ctor.prototype.readPixels = nativeMethod(function readPixels() {
           origRP.apply(this, arguments);
           const px = arguments[6];
           if (px && px.length) {
@@ -1094,7 +1137,7 @@ _SCRIPT_TEMPLATE = r"""
       // WebGLShaderPrecisionFormat brand (nothing consumes it natively).
       const origGSPF = Ctor.prototype.getShaderPrecisionFormat;
       if (origGSPF) {
-        Ctor.prototype.getShaderPrecisionFormat = markNative(
+        Ctor.prototype.getShaderPrecisionFormat = nativeMethod(
           function getShaderPrecisionFormat(shaderType, precisionType) {
             const fmt = origGSPF.call(this, shaderType, precisionType);
             if (!fmt) return fmt;
@@ -1133,19 +1176,19 @@ _SCRIPT_TEMPLATE = r"""
       }, enumerable: false, configurable: true});
     } catch (e) {}
     ['width', 'availWidth'].forEach(p => {
-      redefine(scr, p, () => s.w); redefine(scrProto, p, () => s.w);
+      redefine(scrProto, p, () => s.w);
     });
     ['height'].forEach(p => {
-      redefine(scr, p, () => s.h); redefine(scrProto, p, () => s.h);
+      redefine(scrProto, p, () => s.h);
     });
     ['availHeight'].forEach(p => {
-      redefine(scr, p, () => s.availH); redefine(scrProto, p, () => s.availH);
+      redefine(scrProto, p, () => s.availH);
     });
     ['availLeft', 'availTop'].forEach(p => {
-      redefine(scr, p, () => 0); redefine(scrProto, p, () => 0);
+      redefine(scrProto, p, () => 0);
     });
     ['colorDepth', 'pixelDepth'].forEach(p => {
-      redefine(scr, p, () => s.cd); redefine(scrProto, p, () => s.cd);
+      redefine(scrProto, p, () => s.cd);
     });
     // Window metrics (inner/outer/screenX-Y/visualViewport) stay REAL: CSS
     // media queries read the true layout viewport, so claiming a spoofed
@@ -1166,7 +1209,7 @@ _SCRIPT_TEMPLATE = r"""
     }
     if (navigator.permissions && navigator.permissions.query) {
       const origQuery = navigator.permissions.query;
-      navigator.permissions.query = markNative(function query(desc) {
+      navigator.permissions.query = nativeMethod(function query(desc) {
         const p = origQuery.call(this, desc);
         if (desc && desc.name === 'notifications') {
           return p.then(st => {
@@ -1184,13 +1227,95 @@ _SCRIPT_TEMPLATE = r"""
       }, 'query');
     }
     redefFn(document, 'hasFocus',
-            markNative(function hasFocus() { return true; }, 'hasFocus'));
+            nativeMethod(function hasFocus() { return true; }, 'hasFocus'));
+    // Web Share: real desktop Windows/macOS Chrome ships it, headless builds
+    // (and Linux Chrome) don't — synthesize where the fingerprint says so.
+    if (cfg.platform !== 'linux' && !('share' in navigator)) {
+      redefFn(Navigator.prototype, 'share', nativeMethod(function share(data) {
+        return Promise.reject(new DOMException('Share canceled', 'AbortError'));
+      }, 'share'));
+      redefFn(Navigator.prototype, 'canShare', nativeMethod(function canShare(data) {
+        return false;
+      }, 'canShare'));
+    }
+    // Interfaces headed builds expose and headless drops — absence is a
+    // headless tell (creepjs noContentIndex/noContactsManager/noDownlinkMax).
+    if (!('ContentIndex' in window)) {
+      scope.ContentIndex = nativeMethod(function ContentIndex() {
+        throw new TypeError('Illegal constructor');
+      }, 'ContentIndex');
+    }
+    if (!('ContactsManager' in window)) {
+      scope.ContactsManager = nativeMethod(function ContactsManager() {
+        throw new TypeError('Illegal constructor');
+      }, 'ContactsManager');
+    }
+    if (window.NetworkInformation) {
+      if (!('downlinkMax' in NetworkInformation.prototype)) {
+        redefine(NetworkInformation.prototype, 'downlinkMax', () => 10);
+      }
+    } else {
+      scope.NetworkInformation = nativeMethod(function NetworkInformation() {
+        throw new TypeError('Illegal constructor');
+      }, 'NetworkInformation');
+      redefine(NetworkInformation.prototype, 'downlinkMax', () => 10);
+    }
+    // System colors: headless has no OS theme, so ActiveText etc. compute to
+    // garbage (red) — map to the Windows light palette the fingerprint claims.
+    const SYS_COLORS = {
+      activetext: 'rgb(0, 0, 255)', linktext: 'rgb(0, 0, 255)',
+      visitedtext: 'rgb(85, 26, 139)', buttonface: 'rgb(240, 240, 240)',
+      buttontext: 'rgb(0, 0, 0)', canvas: 'rgb(255, 255, 255)',
+      canvastext: 'rgb(0, 0, 0)', graytext: 'rgb(109, 109, 109)',
+      highlight: 'rgb(0, 120, 215)', highlighttext: 'rgb(255, 255, 255)',
+      buttonborder: 'rgb(109, 109, 109)',
+    };
+    const origGCS = scope.getComputedStyle;
+    scope.getComputedStyle = nativeMethod(function getComputedStyle(el, pseudo) {
+      const decl = origGCS.call(scope, el, pseudo);
+      try {
+        const kw = el && el.style && el.style.backgroundColor;
+        const mapped = kw && SYS_COLORS[String(kw).toLowerCase()];
+        if (mapped) {
+          return new Proxy(decl, {get(t, p, r) {
+            if (p === 'backgroundColor') return mapped;
+            if (p === 'getPropertyValue') {
+              return function(prop) {
+                return String(prop).toLowerCase() === 'background-color'
+                  ? mapped : t.getPropertyValue(prop);
+              };
+            }
+            const v = Reflect.get(t, p, r);
+            return typeof v === 'function' ? v.bind(t) : v;
+          }});
+        }
+      } catch (e) {}
+      return decl;
+    }, 'getComputedStyle');
+    // prefers-color-scheme: headless always reports light; a seeded dark
+    // scheme kills the "like headless" light flag and matches real usage.
+    if (cfg.colorScheme === 'dark') {
+      const origMQM = scope.matchMedia;
+      scope.matchMedia = nativeMethod(function matchMedia(query) {
+        const m = origMQM.call(scope, query);
+        if (typeof query === 'string' && /prefers-color-scheme/.test(query)) {
+          const dark = /dark/.test(query);
+          return new Proxy(m, {get(t, p, r) {
+            if (p === 'matches') return dark;
+            if (p === 'media') return query;
+            const v = Reflect.get(t, p, r);
+            return typeof v === 'function' ? v.bind(t) : v;
+          }});
+        }
+        return m;
+      }, 'matchMedia');
+    }
   }
 
   // ---- media devices ------------------------------------------------------
   if (cfg.spoof.media && navigator.mediaDevices) {
     const devices = cfg.mediaDevices.map(d => Object.assign({}, d));
-    navigator.mediaDevices.enumerateDevices = markNative(function enumerateDevices() {
+    navigator.mediaDevices.enumerateDevices = nativeMethod(function enumerateDevices() {
       return Promise.resolve(devices);
     }, 'enumerateDevices');
   }
@@ -1198,7 +1323,7 @@ _SCRIPT_TEMPLATE = r"""
   // ---- automation conveniences (main thread only) ------------------------
   if (cfg.automation && cfg.spoof.shadow && !isWorker) {
     const origAttach = Element.prototype.attachShadow;
-    Element.prototype.attachShadow = markNative(function attachShadow(init) {
+    Element.prototype.attachShadow = nativeMethod(function attachShadow(init) {
       const root = origAttach.call(this, init);
       try { Object.defineProperty(this, 'fakeShadowRoot',
         {value: root, configurable: true, enumerable: false}); } catch (e) {}
