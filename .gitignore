@@ -1,0 +1,6 @@
+.venv/
+.pytest_cache/
+veilbrowser.egg-info/
+__pycache__/
+*.pyc
+kernels/

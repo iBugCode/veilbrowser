@@ -1,0 +1,363 @@
+"""JS injection engine on a vanilla ungoogled-chromium kernel.
+
+These tests prove veilbrowser no longer depends on fingerprint-chromium's
+release cadence: every spoofable surface is realized by our CDP-injected
+bundle on an unpatched kernel, and the engine survives kernel upgrades.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
+
+import veilbrowser
+from veilbrowser.inject import build_script, js_params
+from veilbrowser.profile import FingerprintProfile, from_preset
+
+
+def _resolved(seed: int, **kw) -> FingerprintProfile:
+    return FingerprintProfile(seed=seed, **kw).resolved()
+
+
+# ------------------------------------------------------------------ unit ---
+
+
+class TestJsParamsUnit:
+    def test_params_deterministic(self):
+        p = _resolved(77)
+        a, b = js_params(p, "153.0.8010.52"), js_params(p, "153.0.8010.52")
+        assert a == b
+
+    def test_params_seed_dependent_gpu(self):
+        gpus = {js_params(_resolved(s), "153.0.8010.52")["webglRenderer"]
+                for s in range(1, 30)}
+        assert len(gpus) >= 2  # not everyone has the same GPU
+
+    def test_script_embeds_config_and_runs_iife(self):
+        params = js_params(_resolved(5), "153.0.8010.52")
+        src = build_script(params)
+        assert src.lstrip().startswith("(() =>")
+        assert '"seed":5' in src or '"seed": 5' in src
+        assert "__VEIL_CFG__" not in src
+
+    def test_ua_matches_platform_and_chrome_version(self):
+        for platform, token, plat in (("windows", "Windows NT 10.0", "Win32"),
+                                      ("macos", "Macintosh", "MacIntel"),
+                                      ("linux", "X11; Linux x86_64", "Linux x86_64")):
+            params = js_params(_resolved(9, platform=platform), "153.0.8010.52")
+            assert token in params["userAgent"]
+            assert params["navPlatform"] == plat
+            assert params["chromeFull"].startswith("153.")
+
+    def test_kernel_fp_false_flags_fit_vanilla(self):
+        p = _resolved(11)
+        flags = p.fingerprint_flags(kernel_fp=False)
+        joined = " ".join(flags)
+        assert "--fingerprint" not in joined
+        assert "--timezone" not in joined
+        assert "--lang=" in joined and "--accept-lang=" in joined
+        # and the kernel variant still carries the patch switches
+        assert "--fingerprint=" in " ".join(p.fingerprint_flags(kernel_fp=True))
+
+
+# ------------------------------------------------------- engine on kernel ---
+
+
+class TestJsEngineIdentity:
+    def test_windows_identity_coherent(self, js_probe_page):
+        prof = from_preset("windows-us-office", seed=1001)
+        b, page = js_probe_page(prof)
+        r = veilbrowser.collect(page)
+        assert "Windows NT 10.0" in r["userAgent"]
+        assert r["platform"] == "Win32"
+        assert r["uaPlatform"] == "Windows"
+        assert any("Google Chrome" in x for x in r["uaBrands"])
+        assert "Chrome/" in r["userAgent"] and "Headless" not in r["userAgent"]
+
+    def test_macos_identity_coherent(self, js_probe_page):
+        prof = from_preset("macos-us-designer", seed=2002)
+        b, page = js_probe_page(prof)
+        r = veilbrowser.collect(page)
+        assert "Macintosh" in r["userAgent"]
+        assert r["platform"] == "MacIntel"
+        assert r["uaPlatform"] == "macOS"
+        gh = page.evaluate(
+            "navigator.userAgentData.getHighEntropyValues(['platformVersion'])",
+            await_promise=True)
+        import json
+        assert "." in str(gh)
+
+    def test_edge_brand_coherent(self, js_probe_page):
+        prof = _resolved(3003, platform="windows", brand="Edge", language="en-US")
+        b, page = js_probe_page(prof)
+        ua = page.evaluate("navigator.userAgent")
+        assert "Edg/" in ua
+        assert any("Microsoft Edge" in x for x in page.evaluate(
+            "navigator.userAgentData.brands.map(x => x.brand)"))
+
+    def test_webdriver_hidden_and_hooks_look_native(self, js_probe_page):
+        b, page = js_probe_page(_resolved(42))
+        r = veilbrowser.collect(page)
+        assert not r.get("webdriver")  # undefined (real-Chrome shape) or false
+        native = page.evaluate(
+            "String(Object.getOwnPropertyDescriptor(Navigator.prototype,'userAgent').get)"
+            ".includes('[native code]')")
+        assert native
+        protoGetter = page.evaluate(
+            "(() => { try { return Navigator.prototype.userAgent; } "
+            "catch (e) { return 'ERR:' + e; } })()")
+        assert protoGetter.startswith("Mozilla/5.0")
+
+    def test_concurrency_and_memory(self, js_probe_page):
+        prof = _resolved(77, platform="windows", hardware_concurrency=4)
+        b, page = js_probe_page(prof)
+        assert page.evaluate("navigator.hardwareConcurrency") == 4
+        assert page.evaluate("[8,16,32].includes(navigator.deviceMemory)")
+
+    def test_timezone_coherent_with_language_and_real_offset(self, js_probe_page):
+        prof = _resolved(501, language="ja-JP")  # tz pool: Asia/Tokyo
+        b, page = js_probe_page(prof)
+        r = veilbrowser.collect(page)
+        assert r["timezone"] == prof.timezone
+        assert r["languages"] == ["ja-JP", "ja"]
+        # getTimezoneOffset (minutes west) must equal python's utcoffset (minutes east)
+        py_off = datetime.now(ZoneInfo(prof.timezone)).utcoffset().total_seconds() / 60
+        assert r["timezoneOffset"] == -py_off
+
+    def test_date_local_semantics(self, js_probe_page):
+        prof = _resolved(502, language="ja-JP")
+        b, page = js_probe_page(prof)
+        checks = page.evaluate("""(() => {
+          const d = new Date(2026, 8, 25, 12, 34, 0);   // local components
+          return {
+            hours: d.getHours(), minutes: d.getMinutes(),
+            day: d.getDate(), month: d.getMonth(),
+            s: d.toString(),
+          };
+        })()""")
+        assert checks["hours"] == 12 and checks["minutes"] == 34
+        assert checks["day"] == 25 and checks["month"] == 8
+        assert "(JST)" in checks["s"] or "Japan" in checks["s"]
+        assert "GMT+0900" in checks["s"]
+
+    def test_plugins_shape(self, js_probe_page):
+        b, page = js_probe_page(_resolved(43))
+        assert page.evaluate("navigator.plugins.length") == 5
+        assert page.evaluate("navigator.mimeTypes.length") == 2
+        assert page.evaluate(
+            "navigator.plugins.namedItem('PDF Viewer') !== null")
+        assert page.evaluate(
+            "navigator.plugins['Chrome PDF Viewer'].name === 'Chrome PDF Viewer'")
+        assert page.evaluate("navigator.pdfViewerEnabled") is True
+
+    def test_probe_rows_all_pass(self, js_probe_page):
+        b, page = js_probe_page(from_preset("windows-us-office", seed=1001))
+        r = veilbrowser.collect(page)
+        rows = veilbrowser.check(r)
+        failed = [name for name, ok, _ in rows if not ok]
+        assert not failed, f"failed check rows: {failed}"
+
+
+class TestJsEngineNoise:
+    CANVAS_JS = """(() => {
+      const c = document.createElement('canvas'); c.width = 220; c.height = 60;
+      const ctx = c.getContext('2d');
+      ctx.textBaseline = 'top'; ctx.font = '16px Arial';
+      ctx.fillStyle = '#0f0'; ctx.fillText('veil-js', 2, 2);   // text-only drawing
+      return c.toDataURL();
+    })()"""
+
+    def test_canvas_deterministic_per_seed(self, js_probe_page):
+        b, page = js_probe_page(_resolved(61))
+        a1 = page.evaluate(self.CANVAS_JS)
+        b2, page2 = js_probe_page(_resolved(61))
+        a2 = page2.evaluate(self.CANVAS_JS)
+        assert a1 == a2
+
+    def test_canvas_seed_dependent(self, js_probe_page):
+        b, page = js_probe_page(_resolved(61))
+        c, page2 = js_probe_page(_resolved(62))
+        assert page.evaluate(self.CANVAS_JS) != page2.evaluate(self.CANVAS_JS)
+
+    def test_canvas_noised_vs_vanilla_control(self, js_probe_page, vanilla_path):
+        """Even a text-only canvas must differ from the unpatched baseline —
+        this is the gap fingerprint-chromium's kernel leaves open."""
+        prof = _resolved(61)
+        b, page = js_probe_page(prof)
+        spoofed = page.evaluate(self.CANVAS_JS)
+        with veilbrowser.launch(prof, engine="kernel", binary=vanilla_path) as raw:
+            page_raw = veilbrowser.probe.open_probe_page(raw)
+            baseline = page_raw.evaluate(self.CANVAS_JS)
+        assert spoofed != baseline
+
+    def test_clientrects_jitter_deterministic(self, js_probe_page):
+        JS = ("(()=>{const d=document.createElement('div');"
+              "d.style.cssText='position:absolute;width:137.5px;font-size:13.37px';"
+              "d.textContent='clientrects';document.body.appendChild(d);"
+              "const rect=d.getClientRects()[0];"
+              "const v=[rect.width, rect.height, rect.top].join(',');d.remove();return v})()")
+        b, page = js_probe_page(_resolved(63))
+        r1 = page.evaluate(JS)
+        width = r1.split(",")[0]
+        assert width != "137.5"  # width was perturbed
+        b2, page2 = js_probe_page(_resolved(63))
+        r2 = page2.evaluate(JS)
+        assert r1 == r2
+
+    def test_audio_seed_dependent(self, js_probe_page):
+        b, page = js_probe_page(_resolved(64))
+        c, page2 = js_probe_page(_resolved(65))
+        s1 = page.evaluate(
+            "(async()=>{const ac=new OfflineAudioContext(1,44100,44100);"
+            "const o=ac.createOscillator();const g=ac.createGain();"
+            "o.type='triangle';g.gain.value=0.5;o.connect(g);g.connect(ac.destination);"
+            "o.start(0);const buf=await ac.startRendering();"
+            "const d=buf.getChannelData(0);let s=0;for(let i=4500;i<5000;i++)s+=Math.abs(d[i]);"
+            "return s})()", await_promise=True)
+        s2 = page2.evaluate(
+            "(async()=>{const ac=new OfflineAudioContext(1,44100,44100);"
+            "const o=ac.createOscillator();const g=ac.createGain();"
+            "o.type='triangle';g.gain.value=0.5;o.connect(g);g.connect(ac.destination);"
+            "o.start(0);const buf=await ac.startRendering();"
+            "const d=buf.getChannelData(0);let s=0;for(let i=4500;i<5000;i++)s+=Math.abs(d[i]);"
+            "return s})()", await_promise=True)
+        assert s1 != s2
+
+    def test_webgl_strings_from_profile(self, js_probe_page):
+        prof = _resolved(66)
+        b, page = js_probe_page(prof)
+        params = js_params(prof)
+        r = page.evaluate(
+            "(()=>{const gc=document.createElement('canvas').getContext('webgl');"
+            "const dbg=gc.getExtension('WEBGL_debug_renderer_info');"
+            "return [gc.getParameter(dbg.UNMASKED_VENDOR_WEBGL),"
+            "gc.getParameter(dbg.UNMASKED_RENDERER_WEBGL)]})()")
+        assert r == [params["webglVendor"], params["webglRenderer"]]
+
+    def test_getters_survive_prototype_escape(self, js_probe_page):
+        b, page = js_probe_page(_resolved(67, platform="windows"))
+        v = page.evaluate(
+            "Object.getOwnPropertyDescriptor(Navigator.prototype,'platform')"
+            ".get.call(navigator)")
+        assert v == "Win32"
+
+
+class TestJsEngineFrames:
+    def test_injection_covers_iframes(self, js_probe_page):
+        b, page = js_probe_page(from_preset("windows-us-office", seed=1001))
+        ua = page.evaluate("""(async () => {
+          const f = document.createElement('iframe');
+          f.srcdoc = '<html><body>frame</body></html>';
+          document.body.appendChild(f);
+          await new Promise(res => f.onload = res);
+          return f.contentWindow.navigator.userAgent;
+        })()""", await_promise=True)
+        assert "Windows NT 10.0" in ua
+
+
+class TestJsEngineWithProxy:
+    BYPASS_LOOPBACK = ["--proxy-bypass-list=<-loopback>"]
+
+    def test_authenticated_http_chain_still_authenticates(self, js_probe_page):
+        from tests._proxies import TargetSite, UpstreamHTTPProxy
+
+        target, upstream = TargetSite(), UpstreamHTTPProxy("user", "pw")
+        try:
+            prof = _resolved(71, proxy=f"http://user:pw@127.0.0.1:{upstream.port}")
+            b = veilbrowser.launch(prof, engine="js",
+                                   extra_flags=self.BYPASS_LOOPBACK)
+            try:
+                page = b.new_page(f"http://127.0.0.1:{target.port}/probe")
+                body = page.evaluate("document.body.innerText")
+                assert '"ok": true' in body
+                assert upstream.saw_auth  # credentials reached the upstream
+                assert any("/probe" in p for p in target.requests)
+            finally:
+                b.stop()
+        finally:
+            target.stop()
+            upstream.stop()
+
+
+class TestJsEngineCoherence:
+    """Camoufox-inspired coherence: HTTP headers, screen metrics, media devices."""
+
+    def test_http_ua_header_matches_navigator(self, make_js_browser):
+        """The gap pure-JS engines leave: Sec-CH-UA/User-Agent HTTP headers
+        must agree with navigator.* — enforced via CDP UA override."""
+        from tests._proxies import TargetSite
+
+        prof = from_preset("windows-us-office", seed=1001)
+        target = TargetSite()
+        try:
+            b = make_js_browser(prof)
+            page = b.new_page(f"http://127.0.0.1:{target.port}/probe")
+            nav_ua = page.evaluate("navigator.userAgent")
+            nav_platform_ch = page.evaluate(
+                "navigator.userAgentData.platform")
+            assert target.user_agents, "target saw no request"
+            assert all(ua == nav_ua for ua in target.user_agents), (
+                f"header UA mismatch: {target.user_agents!r} vs {nav_ua!r}")
+            assert all(p.strip('"') == nav_platform_ch
+                       for p in target.client_hints.get("sec-ch-ua-platform", []))
+            assert all("Google Chrome" in c
+                       for c in target.client_hints.get("sec-ch-ua", []))
+            assert any("/probe" in p for p in target.requests)
+            b.stop()
+        finally:
+            target.stop()
+
+    def test_screen_metrics_coherent(self, js_probe_page):
+        prof = _resolved(81, platform="windows")
+        params = js_params(prof)
+        b, page = js_probe_page(prof)
+        got = page.evaluate(
+            "[screen.width, screen.height, screen.availWidth, screen.availHeight,"
+            "window.outerWidth, window.outerHeight, screen.colorDepth]")
+        s = params["screen"]
+        assert got == [s["w"], s["h"], s["availW"], s["availH"], s["w"], s["h"], s["cd"]]
+
+    def test_screen_seed_dependent(self, js_probe_page):
+        widths = set()
+        for seed in (81, 82, 83, 84):
+            prof = _resolved(seed, platform="windows")
+            params = js_params(prof)
+            b, page = js_probe_page(prof)
+            widths.add(page.evaluate("screen.width + 'x' + screen.height"))
+            b.stop()
+        assert len(widths) >= 2
+
+    def test_media_devices_spoofed(self, js_probe_page):
+        prof = _resolved(85)
+        params = js_params(prof)
+        b, page = js_probe_page(prof)
+        kinds = page.evaluate(
+            "navigator.mediaDevices.enumerateDevices().then(ds => ds.map(d => d.kind))",
+            await_promise=True)
+        assert sorted(kinds) == sorted(d["kind"] for d in params["mediaDevices"])
+        assert "audioinput" in kinds
+
+    def test_webrtc_prefs_seeded_with_proxy(self, make_js_browser):
+        import json
+        import os
+        prof = _resolved(86, proxy="socks5://u:p@127.0.0.1:1080")
+        b = make_js_browser(prof)
+        try:
+            prefs = json.load(open(os.path.join(b.user_data_dir, "Default",
+                                                "Preferences"), encoding="utf-8"))
+            assert prefs["webrtc"]["ip_handling_policy"] == "disable_non_proxied_udp"
+            assert prefs["webrtc"]["nonproxied_udp_enabled"] is False
+        finally:
+            b.stop()
+
+    def test_no_proxy_no_webrtc_pref(self, make_js_browser):
+        import os
+        prof = _resolved(87)
+        b = make_js_browser(prof)
+        try:
+            assert not os.path.exists(os.path.join(b.user_data_dir, "Default",
+                                                   "Preferences"))
+        finally:
+            b.stop()

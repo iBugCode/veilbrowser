@@ -1,0 +1,647 @@
+"""Kernel-independent fingerprint engine.
+
+Instead of relying on fingerprint-chromium's C++ patches (which pin us to
+whatever kernel the upstream maintainer has released), the fingerprint lives
+in a JS bundle injected into every frame at document-start via CDP
+``Page.addScriptToEvaluateOnNewDocument``.  Any vanilla Chromium/ungoogled
+kernel becomes a fingerprint browser; upgrading the kernel is just a
+download.
+
+Surfaces covered (all parameterised by the profile seed so two sessions with
+different seeds never agree, and the same seed is bit-stable):
+
+  * navigator UA / platform / userAgentData + getHighEntropyValues
+  * webdriver removal, plugins/mimeTypes (PDF viewer set), deviceMemory,
+    hardwareConcurrency, languages
+  * timezone: Date.getTimezoneOffset / toString / toLocale*String,
+    Intl.DateTimeFormat construction + resolvedOptions, local component
+    getters and the local-parsing Date constructor
+  * canvas: getImageData + toDataURL/toBlob noise, measureText jitter
+  * client rects: getBoundingClientRect/getClientRects micro-jitter
+  * audio: OfflineAudioContext.startRendering + AnalyserNode buffers
+  * webgl: getParameter vendor/renderer strings (+ readPixels noise)
+  * automation conveniences: fakeShadowRoot, Headless UA scrub
+"""
+
+from __future__ import annotations
+
+import json
+
+from .profile import FingerprintProfile
+
+# ---------------------------------------------------------------- params ---
+
+
+def _ua_strings(platform: str, chrome_full: str, brand: str) -> tuple[str, str, str]:
+    """(userAgent, navigator.platform, UA-CH platform) for a spoofed OS."""
+    tok = {
+        "Chrome": f"Chrome/{chrome_full}",
+        "Chromium": f"Chrome/{chrome_full}",
+        "Edge": f"Chrome/{chrome_full} Edg/{chrome_full}",
+        "Vivaldi": f"Chrome/{chrome_full}",
+        "Opera": f"Chrome/{chrome_full} OPR/1.0.0",
+    }.get(brand, f"Chrome/{chrome_full}")
+    base = f"Mozilla/5.0 ({{os}}) AppleWebKit/537.36 (KHTML, like Gecko) {tok} Safari/537.36"
+    if platform == "windows":
+        return base.format(os="Windows NT 10.0; Win64; x64"), "Win32", "Windows"
+    if platform == "macos":
+        return base.format(os="Macintosh; Intel Mac OS X 10_15_7"), "MacIntel", "macOS"
+    return base.format(os="X11; Linux x86_64"), "Linux x86_64", "Linux"
+
+
+_PLATFORM_VERSIONS = {
+    "windows": ("10.0.0", "15.0.0", "13.0.0", "11.0.0"),
+    "macos": ("10.15.7", "14.7.1", "15.3.1"),
+    "linux": ("6.1.0", "6.12.0", "5.15.0"),
+}
+
+_SCREENS = {
+    "windows": ((1920, 1080), (2560, 1440), (1366, 768), (1680, 1050), (3840, 2160)),
+    "macos": ((1440, 900), (1536, 960), (1680, 1050), (1710, 1112)),
+    "linux": ((1920, 1080), (1600, 900), (2560, 1440), (1366, 768)),
+}
+
+
+def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> dict:
+    """Everything the JS bundle needs, derived deterministically from profile."""
+    import random
+    import hashlib
+
+    def rng(*salt: str) -> random.Random:
+        h = hashlib.sha256(f"{profile.seed}:{'|'.join(salt)}".encode()).digest()
+        return random.Random(int.from_bytes(h, "big"))
+
+    resolved = profile.resolved()
+    chrome_full = chrome_full or resolved.brand_version or "153.0.8010.52"
+    brand_name = {
+        "Chrome": "Google Chrome", "Chromium": "Chromium", "Edge": "Microsoft Edge",
+        "Vivaldi": "Vivaldi", "Opera": "Opera",
+    }.get(resolved.brand, "Google Chrome")
+    ua, nav_platform, uach_platform = _ua_strings(
+        resolved.platform, chrome_full, resolved.brand)
+
+    r_ver = rng("platformVersion")
+    platform_version = r_ver.choice(_PLATFORM_VERSIONS[resolved.platform])
+
+    greases = [("8", "8.0.0.0"), ("1", "1.2.3.4"), ("24", "24.1.2.3"), ("10", "10.9.8.7")]
+    r_br = rng("brands")
+    g1 = r_br.choice(greases)
+    g2 = r_br.choice([g for g in greases if g != g1])
+    major = chrome_full.split(".")[0]
+    brands = [
+        {"brand": f"Not.A/Brand;{g1[0]}", "version": g1[1]},
+        {"brand": f"{brand_name};{major}", "version": chrome_full},
+        {"brand": f"Not?A_Brand;{g2[0]}", "version": g2[1]},
+    ]
+    full_list = [{"brand": f"{brand_name};{major}", "version": chrome_full}]
+
+    r_gl = rng("webgl")
+    gpu = r_gl.choice([
+        ("Google Inc. (Intel)", "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL 4.6)"),
+        ("Google Inc. (Intel)", "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2), OpenGL 4.6)"),
+        ("Google Inc. (AMD)", "ANGLE (AMD, Mesa Radeon(R) Graphics (Renoir), OpenGL 4.6)"),
+        ("Google Inc. (NVIDIA)", "ANGLE (NVIDIA, Mesa NVIDIA RTX 3060/PCIe/SSE2, OpenGL 4.6)"),
+    ])
+
+    r_scr = rng("screen")
+    sw, sh = r_scr.choice(_SCREENS[resolved.platform])
+    taskbar = r_scr.choice((40, 48, 60, 72)) if resolved.platform == "windows" \
+        else r_scr.choice((24, 25, 38))
+    screen = {"w": sw, "h": sh, "availW": sw, "availH": sh - taskbar,
+              "cd": r_scr.choice((24, 30)), "pd": 24}
+
+    r_dev = rng("devices")
+    devices = []
+    for _ in range(r_dev.choice((1, 1, 2))):          # microphones
+        devices.append({"kind": "audioinput", "label": "", "deviceId": "",
+                        "groupId": ""})
+    if r_dev.random() < 0.75:                          # webcam
+        devices.append({"kind": "videoinput", "label": "", "deviceId": "",
+                        "groupId": ""})
+    devices.append({"kind": "audiooutput", "label": "", "deviceId": "",
+                    "groupId": ""})
+
+    return {
+        "seed": resolved.seed,
+        "platform": resolved.platform,
+        "userAgent": ua,
+        "navPlatform": nav_platform,
+        "uachPlatform": uach_platform,
+        "platformVersion": platform_version,
+        "chromeFull": chrome_full,
+        "brands": brands,
+        "fullVersionList": full_list,
+        "languages": [resolved.language, resolved.language.split("-")[0]],
+        "acceptLanguage": resolved.accept_language(),
+        "timezone": resolved.timezone,
+        "timezoneName": _tz_display_name(resolved.timezone),
+        "hardwareConcurrency": resolved.hardware_concurrency,
+        "deviceMemory": r_gl.choice([8, 8, 16, 32]),
+        "webglVendor": gpu[0],
+        "webglRenderer": gpu[1],
+        "screen": screen,
+        "mediaDevices": devices,
+        "userAgentMetadata": {
+            "brands": [{"brand": b["brand"].split(";")[0], "version": b["version"]}
+                       for b in brands],
+            "fullVersionList": [{"brand": f["brand"].split(";")[0],
+                                 "version": f["version"]} for f in full_list],
+            "fullVersion": chrome_full,
+            "platform": uach_platform,
+            "platformVersion": platform_version,
+            "architecture": "x86",
+            "bitness": "64",
+            "model": "",
+            "mobile": False,
+            "wow64": False,
+        },
+        "spoof": {
+            "ua": True, "tz": True, "canvas": True, "rects": True,
+            "audio": True, "webgl": True, "plugins": True, "shadow": True,
+            "screen": True, "media": True,
+        },
+        "automation": True,
+    }
+
+
+def _tz_display_name(tz: str) -> str:
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(tz)).tzname() or tz
+    except Exception:
+        return tz
+
+
+# ---------------------------------------------------------------- script ---
+
+_SCRIPT_TEMPLATE = r"""
+(() => {
+  const cfg = __VEIL_CFG__;
+  if (!cfg || window.__veil_installed) return;
+  try { Object.defineProperty(window, '__veil_installed', {value: true, enumerable: false}); } catch (e) {}
+
+  // ---- helpers -----------------------------------------------------------
+  function hash32(str, seed) {
+    let h = 2166136261 ^ (seed >>> 0);
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+  function prng(seed) {
+    let s = (seed >>> 0) || 0x9e3779b9;
+    return function () { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+  }
+  const nativeFns = new Map();
+  const origFnToString = Function.prototype.toString;
+  function markNative(fn, name) {
+    nativeFns.set(fn, name || fn.name);
+    try { Object.defineProperty(fn, 'name', {value: name || fn.name, configurable: true}); } catch (e) {}
+    return fn;
+  }
+  Function.prototype.toString = markNative(function toString() {
+    if (nativeFns.has(this)) return 'function ' + nativeFns.get(this) + '() { [native code] }';
+    return origFnToString.call(this);
+  }, 'toString');
+  function redefine(obj, prop, getter, setter) {
+    let enumerable = true, have = null;
+    try { have = Object.getOwnPropertyDescriptor(obj, prop); } catch (e) {}
+    if (have) enumerable = have.enumerable;
+    try {
+      Object.defineProperty(obj, prop, {
+        get: markNative(getter, 'get ' + prop),
+        set: setter, configurable: true, enumerable: enumerable,
+      });
+    } catch (e) {}
+  }
+  // for methods: a plain (writable, configurable) value property
+  function redefFn(obj, prop, fn) {
+    let enumerable = true, have = null;
+    try { have = Object.getOwnPropertyDescriptor(obj, prop); } catch (e) {}
+    if (have) enumerable = have.enumerable;
+    try {
+      Object.defineProperty(obj, prop,
+        {value: fn, writable: true, configurable: true, enumerable: enumerable});
+    } catch (e) {}
+  }
+
+  // ---- navigator ---------------------------------------------------------
+  if (cfg.spoof.ua) {
+    const proto = Navigator.prototype;
+    redefine(navigator, 'userAgent', () => cfg.userAgent);
+    redefine(proto, 'userAgent', () => cfg.userAgent);
+    redefine(navigator, 'appVersion', () => cfg.userAgent.replace(/^Mozilla\//, ''));
+    redefine(proto, 'appVersion', () => cfg.userAgent.replace(/^Mozilla\//, ''));
+    redefine(navigator, 'platform', () => cfg.navPlatform);
+    redefine(proto, 'platform', () => cfg.navPlatform);
+    delete navigator.webdriver;
+    redefine(navigator, 'webdriver', () => undefined);
+    redefine(proto, 'webdriver', () => undefined);
+    redefine(navigator, 'hardwareConcurrency', () => cfg.hardwareConcurrency);
+    redefine(proto, 'hardwareConcurrency', () => cfg.hardwareConcurrency);
+    redefine(navigator, 'deviceMemory', () => cfg.deviceMemory);
+    redefine(proto, 'deviceMemory', () => cfg.deviceMemory);
+    const langs = Object.freeze(cfg.languages.slice());
+    redefine(navigator, 'languages', () => langs);
+    redefine(proto, 'languages', () => langs);
+    redefine(navigator, 'language', () => langs[0]);
+    redefine(proto, 'language', () => langs[0]);
+
+    // UA-CH
+    const uaData = {
+      brands: cfg.brands.map(b => ({brand: b.brand.split(';')[0], version: b.version})),
+      mobile: false,
+      platform: cfg.uachPlatform,
+      toJSON: markNative(function toJSON() {
+        return {brands: this.brands, mobile: this.mobile, platform: this.platform};
+      }, 'toJSON'),
+    };
+    uaData.getHighEntropyValues = markNative(function getHighEntropyValues(hints) {
+      return Promise.resolve().then(() => {
+        const out = {mobile: uaData.mobile, platform: uaData.platform, model: ''};
+        (hints || []).forEach(h => {
+          if (h === 'platformVersion') out[h] = cfg.platformVersion;
+          else if (h === 'architecture') out[h] = 'x86';
+          else if (h === 'bitness') out[h] = '64';
+          else if (h === 'uaFullVersion') out[h] = cfg.chromeFull;
+          else if (h === 'fullVersionList') out[h] = cfg.fullVersionList;
+          else if (h === 'model') out[h] = '';
+          else if (h === 'wow64') out[h] = false;
+        });
+        return out;
+      });
+    }, 'getHighEntropyValues');
+    redefine(navigator, 'userAgentData', () => uaData);
+    redefine(proto, 'userAgentData', () => uaData);
+
+    if (cfg.spoof.plugins) {
+      const mimes = [
+        {type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format'},
+        {type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format'},
+      ];
+      const names = ['PDF Viewer', 'Chrome PDF Viewer', 'Chromium PDF Viewer',
+                     'Microsoft Edge PDF Viewer', 'WebKit built-in PDF'];
+      const pluginArr = Object.create(PluginArray.prototype);
+      const mimeArr = Object.create(MimeTypeArray.prototype);
+      const pluginList = [], mimeList = [];
+      names.forEach((name, i) => {
+        const p = Object.create(Plugin.prototype);
+        Object.defineProperties(p, {
+          name: {value: name}, filename: {value: 'internal-pdf-viewer'},
+          description: {value: 'Portable Document Format'}, length: {value: mimes.length},
+        });
+        mimes.forEach((m, j) => {
+          const mt = Object.create(MimeType.prototype);
+          Object.defineProperties(mt, {
+            type: {value: m.type}, suffixes: {value: m.suffixes},
+            description: {value: m.description},
+            enabledPlugin: {value: p},
+          });
+          Object.defineProperty(p, String(j), {value: mt});
+          if (i === 0) { mimeList.push(mt); Object.defineProperty(mimeArr, String(j), {value: mt}); }
+        });
+        p.item = markNative(function item(i2) { return this[String(i2)] || null; }, 'item');
+        p.namedItem = markNative(function namedItem(n) { return this[n] || null; }, 'namedItem');
+        pluginList.push(p);
+        Object.defineProperty(pluginArr, String(i), {value: p});
+        Object.defineProperty(pluginArr, name, {value: p});
+      });
+      // plain `arr.length = n` would silently no-op against the read-only
+      // WebIDL accessor on the prototype, so define own properties explicitly
+      Object.defineProperty(pluginArr, 'length',
+        {value: pluginList.length, writable: true, configurable: true, enumerable: true});
+      pluginArr.item = markNative(function item(i2) { return pluginList[i2] || null; }, 'item');
+      pluginArr.namedItem = markNative(function namedItem(n) { return pluginArr[n] || null; }, 'namedItem');
+      pluginArr[Symbol.iterator] = markNative(function* () { yield* pluginList; }, '[Symbol.iterator]');
+      Object.defineProperty(mimeArr, 'length',
+        {value: mimeList.length, writable: true, configurable: true, enumerable: true});
+      mimeArr.item = markNative(function item(i2) { return mimeList[i2] || null; }, 'item');
+      mimeArr.namedItem = markNative(function namedItem(n) {
+        return mimeList.find(m => m.type === n) || null;
+      }, 'namedItem');
+      mimeArr[Symbol.iterator] = markNative(function* () { yield* mimeList; }, '[Symbol.iterator]');
+      redefine(navigator, 'plugins', () => pluginArr);
+      redefine(proto, 'plugins', () => pluginArr);
+      redefine(navigator, 'mimeTypes', () => mimeArr);
+      redefine(proto, 'mimeTypes', () => mimeArr);
+      redefine(navigator, 'pdfViewerEnabled', () => true);
+      redefine(proto, 'pdfViewerEnabled', () => true);
+    }
+  }
+
+  // ---- timezone ----------------------------------------------------------
+  if (cfg.spoof.tz) {
+    function offsetMinutes(d) {
+      try {
+        const parts = new Intl.DateTimeFormat('en-US',
+          {timeZone: cfg.timezone, timeZoneName: 'longOffset'}).formatToParts(d);
+        const name = (parts.find(p => p.type === 'timeZoneName') || {}).value || 'GMT';
+        const m = name.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+        if (!m) return 0;
+        const sign = m[1] === '-' ? -1 : 1;
+        return -(sign * (parseInt(m[2], 10) * 60 + parseInt(m[3] || '0', 10)));
+      } catch (e) { return 0; }
+    }
+    // getTimezoneOffset: minutes *west* of UTC
+    redefFn(Date.prototype, 'getTimezoneOffset', markNative(
+      function getTimezoneOffset() { return offsetMinutes(this); }, 'getTimezoneOffset'));
+
+    // Intl.DateTimeFormat: inject our tz when the caller didn't pin one
+    const RealDTF = Intl.DateTimeFormat;
+    const realRO = RealDTF.prototype.resolvedOptions;
+    const pinned = new WeakMap();
+    function VeilDTF(locales, options) {
+      const opts = options || {};
+      let inst;
+      if (opts.timeZone) inst = Reflect.construct(RealDTF, [locales, opts]);
+      else inst = Reflect.construct(RealDTF, [locales, Object.assign({}, opts, {timeZone: cfg.timezone})]);
+      pinned.set(inst, !!opts.timeZone);
+      return inst;
+    }
+    VeilDTF.prototype = RealDTF.prototype;
+    VeilDTF.supportedLocalesOf = RealDTF.supportedLocalesOf;
+    markNative(VeilDTF, 'DateTimeFormat');
+    try { Object.defineProperty(Intl, 'DateTimeFormat',
+      {value: VeilDTF, writable: true, configurable: true}); } catch (e) {}
+    Intl.DateTimeFormat.prototype.resolvedOptions = markNative(function resolvedOptions() {
+      const r = realRO.call(this);
+      if (pinned.has(this) && !pinned.get(this)) r.timeZone = cfg.timezone;
+      return r;
+    }, 'resolvedOptions');
+
+    // Date.prototype.toString tail: "GMT-04:00" -> "GMT-0400 (Name)"
+    const origToString = Date.prototype.toString;
+    redefFn(Date.prototype, 'toString', markNative(function toString() {
+      const s = origToString.call(this);
+      const off = -offsetMinutes(this);
+      const sign = off < 0 ? '-' : '+';
+      const a = Math.abs(off);
+      const tail = 'GMT' + sign +
+        String(Math.floor(a / 60)).padStart(2, '0') + String(a % 60).padStart(2, '0') +
+        ' (' + cfg.timezoneName + ')';
+      return s.replace(/GMT[+-]\d{2}\d{2}.*$/, tail);
+    }, 'toString'));
+
+    // toLocale*String honour our tz explicitly
+    ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'].forEach(m => {
+      const orig = Date.prototype[m];
+      redefFn(Date.prototype, m, markNative(function (locales, options) {
+        const o = Object.assign({}, options || {}, {timeZone: cfg.timezone});
+        try { return orig.call(this, locales || cfg.languages[0], o); }
+        catch (e) { return orig.call(this, locales, options); }
+      }, m));
+    });
+
+    // local component getters
+    const localFields = ['FullYear', 'Month', 'Date', 'Day', 'Hours', 'Minutes'];
+    localFields.forEach(f => {
+      const orig = Date.prototype['get' + f];
+      const utcGet = Date.prototype['getUTC' + f];
+      redefFn(Date.prototype, 'get' + f, markNative(function () {
+        const shifted = new RealDate(this.getTime() - offsetMinutes(this) * 60000);
+        return utcGet.call(shifted);
+      }, 'get' + f));
+    });
+    // new Date(y, m, ...) local-parsing constructor
+    const RealDate = Date;
+    function offsetAt(ms) { return offsetMinutes(new RealDate(ms)); }
+    function VeilDate(...args) {
+      if (!new.target) return RealDate(...args);
+      if (args.length >= 2) {
+        let [y, mo, d, h, mi, s, ms] = args;
+        y = Number(y); mo = Number(mo);
+        if (y >= 0 && y <= 99) y += 1900;
+        // components are *our-local*: instant = UTC(components) + westOffset
+        let guess = RealDate.UTC(y, mo, d || 1, h || 0, mi || 0, s || 0, ms || 0);
+        guess += offsetAt(guess) * 60000;
+        return new RealDate(guess);
+      }
+      return Reflect.construct(RealDate, args, new.target);
+    }
+    VeilDate.prototype = RealDate.prototype;
+    VeilDate.now = RealDate.now; VeilDate.parse = RealDate.parse; VeilDate.UTC = RealDate.UTC;
+    markNative(VeilDate, 'Date');
+    try { Object.defineProperty(window, 'Date',
+      {value: VeilDate, writable: true, configurable: true}); } catch (e) {}
+  }
+
+  // ---- canvas ------------------------------------------------------------
+  if (cfg.spoof.canvas) {
+    function noiseBytes(seed, w, h, len) {
+      const r = prng(hash32(w + 'x' + h, seed));
+      const mask = new Uint8Array(Math.min(len, 512));
+      for (let i = 0; i < mask.length; i++) mask[i] = (r() * 256) | 0;
+      return mask;
+    }
+    function noisedImageData(ctx, imageData, seed) {
+      const d = imageData.data;
+      const mask = noiseBytes(seed, imageData.width, imageData.height, d.length);
+      for (let i = 0; i < mask.length; i++) {
+        const p = (i * 251) % d.length;
+        if (p % 4 !== 3) d[p] ^= mask[i] & 1;
+      }
+      return imageData;
+    }
+    const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+    CanvasRenderingContext2D.prototype.getImageData = markNative(function getImageData() {
+      const id = origGetImageData.apply(this, arguments);
+      return noisedImageData(this, id, cfg.seed);
+    }, 'getImageData');
+    const origGetImageData2 = OffscreenCanvasRenderingContext2D.prototype.getImageData;
+    OffscreenCanvasRenderingContext2D.prototype.getImageData = markNative(function getImageData() {
+      const id = origGetImageData2.apply(this, arguments);
+      return noisedImageData(this, id, cfg.seed);
+    }, 'getImageData');
+
+    function redrawingClone(canvas) {
+      const c2 = document.createElement('canvas');
+      c2.width = canvas.width; c2.height = canvas.height;
+      const ctx2 = c2.getContext('2d');
+      const ctx = canvas.getContext('2d');
+      const id = origGetImageData.call(ctx, 0, 0, canvas.width, canvas.height);
+      ctx2.putImageData(noisedImageData(ctx, id, cfg.seed), 0, 0);
+      return c2;
+    }
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = markNative(function toDataURL() {
+      try { return origToDataURL.apply(redrawingClone(this), arguments); }
+      catch (e) { return origToDataURL.apply(this, arguments); }
+    }, 'toDataURL');
+    const origToBlob = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.toBlob = markNative(function toBlob(cb, type, q) {
+      try { return origToBlob.call(redrawingClone(this), cb, type, q); }
+      catch (e) { return origToBlob.call(this, cb, type, q); }
+    }, 'toBlob');
+    const origConvertToBlob = OffscreenCanvas.prototype.convertToBlob;
+    OffscreenCanvas.prototype.convertToBlob = markNative(function convertToBlob(opts) {
+      try {
+        const c2 = document.createElement('canvas');
+        c2.width = this.width; c2.height = this.height;
+        c2.getContext('2d').putImageData(
+          noisedImageData(this.getContext('2d'),
+            origGetImageData2.call(this.getContext('2d'), 0, 0, this.width, this.height), cfg.seed), 0, 0);
+        return origToDataURL === null ? null : convertImpl(c2, opts);
+      } catch (e) { return origConvertToBlob.call(this, opts); }
+    }, 'convertToBlob');
+    function convertImpl(canvas, opts) {
+      const url = origToDataURL.call(canvas, (opts || {}).type || 'image/png', (opts || {}).quality);
+      const bin = atob(url.split(',')[1]);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return Promise.resolve(new Blob([bytes], {type: (opts || {}).type || 'image/png'}));
+    }
+
+    const origMeasure = CanvasRenderingContext2D.prototype.measureText;
+    CanvasRenderingContext2D.prototype.measureText = markNative(function measureText(text) {
+      const m = origMeasure.call(this, text);
+      const eps = ((hash32(String(text), cfg.seed) % 1000) - 500) / 50000;  // +-0.01px
+      return Object.create(m, {width: {value: m.width + eps, enumerable: true}});
+    }, 'measureText');
+  }
+
+  // ---- client rects ------------------------------------------------------
+  if (cfg.spoof.rects) {
+    function adjust(rect, el) {
+      const key = [rect.left, rect.top, rect.width, rect.height,
+                   el && el.tagName || ''].join(',');
+      const dx = ((hash32(key, cfg.seed) % 2000) - 1000) / 100000;  // +-0.01px
+      return new DOMRect(rect.x + dx, rect.y + dx, rect.width + dx, rect.height + dx);
+    }
+    const origGBR = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = markNative(function getBoundingClientRect() {
+      return adjust(origGBR.call(this), this);
+    }, 'getBoundingClientRect');
+    const origGCR = Element.prototype.getClientRects;
+    Element.prototype.getClientRects = markNative(function getClientRects() {
+      const list = origGCR.call(this);
+      const out = [];
+      for (let i = 0; i < list.length; i++) out.push(adjust(list[i], this));
+      const wrapped = Object.create(list.constructor.prototype);
+      for (let i = 0; i < out.length; i++)
+        Object.defineProperty(wrapped, String(i),
+          {value: out[i], writable: true, configurable: true, enumerable: true});
+      Object.defineProperty(wrapped, 'length',
+        {value: out.length, writable: true, configurable: true, enumerable: true});
+      wrapped.item = markNative(function item(i2) { return out[i2] || null; }, 'item');
+      wrapped[Symbol.iterator] = markNative(function* () { yield* out; }, '[Symbol.iterator]');
+      return wrapped;
+    }, 'getClientRects');
+  }
+
+  // ---- audio -------------------------------------------------------------
+  if (cfg.spoof.audio) {
+    function jitterBuffer(buf, ctx) {
+      const out = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
+      for (let c = 0; c < buf.numberOfChannels; c++) {
+        const src = buf.getChannelData(c);
+        const dst = out.getChannelData(c);
+        const r = prng(hash32('audio' + c + buf.length, cfg.seed));
+        for (let i = 0; i < src.length; i++) dst[i] = src[i] + (r() - 0.5) * 2e-7;
+      }
+      return out;
+    }
+    const origStart = OfflineAudioContext.prototype.startRendering;
+    OfflineAudioContext.prototype.startRendering = markNative(function startRendering() {
+      return origStart.call(this).then(buf => jitterBuffer(buf, this));
+    }, 'startRendering');
+    const origGetFloat = AnalyserNode.prototype.getFloatFrequencyData;
+    AnalyserNode.prototype.getFloatFrequencyData = markNative(function getFloatFrequencyData(arr) {
+      origGetFloat.call(this, arr);
+      const r = prng(hash32('analyser' + arr.length, cfg.seed));
+      for (let i = 0; i < arr.length; i++) arr[i] += (r() - 0.5) * 1e-4;
+    }, 'getFloatFrequencyData');
+  }
+
+  // ---- webgl -------------------------------------------------------------
+  if (cfg.spoof.webgl) {
+    const VENDOR = 0x1F00, RENDERER = 0x1F01, VERSION = 0x1F02;
+    const UNMASKED_VENDOR = 0x9245, UNMASKED_RENDERER = 0x9246;
+    [window.WebGLRenderingContext, window.WebGL2RenderingContext].forEach(Ctor => {
+      if (!Ctor) return;
+      const origGP = Ctor.prototype.getParameter;
+      Ctor.prototype.getParameter = markNative(function getParameter(p) {
+        if (p === UNMASKED_VENDOR) return cfg.webglVendor;
+        if (p === UNMASKED_RENDERER) return cfg.webglRenderer;
+        if (p === VERSION) return 'WebGL 2.0 (OpenGL ES 3.0 Chromium)';
+        return origGP.call(this, p);
+      }, 'getParameter');
+      const origRP = Ctor.prototype.readPixels;
+      if (origRP) {
+        Ctor.prototype.readPixels = markNative(function readPixels() {
+          origRP.apply(this, arguments);
+          const px = arguments[6];
+          if (px && px.length) {
+            const r = prng(hash32('rp' + px.length, cfg.seed));
+            for (let i = 0; i < Math.min(px.length, 64); i++)
+              if (i % 4 !== 3) px[i] = (px[i] + ((r() * 2) | 0)) & 0xff;
+          }
+        }, 'readPixels');
+      }
+    });
+  }
+
+  // ---- screen & window metrics ------------------------------------------
+  if (cfg.spoof.screen) {
+    const s = cfg.screen;
+    const scr = window.screen, scrProto = Screen.prototype;
+    ['width', 'availWidth'].forEach(p => {
+      redefine(scr, p, () => s.w); redefine(scrProto, p, () => s.w);
+    });
+    ['height'].forEach(p => {
+      redefine(scr, p, () => s.h); redefine(scrProto, p, () => s.h);
+    });
+    ['availHeight'].forEach(p => {
+      redefine(scr, p, () => s.availH); redefine(scrProto, p, () => s.availH);
+    });
+    ['colorDepth', 'pixelDepth'].forEach(p => {
+      redefine(scr, p, () => s.cd); redefine(scrProto, p, () => s.cd);
+    });
+    redefine(window, 'outerWidth', () => s.w);
+    redefine(window, 'outerHeight', () => s.h);
+  }
+
+  // ---- media devices ------------------------------------------------------
+  if (cfg.spoof.media && navigator.mediaDevices) {
+    const devices = cfg.mediaDevices.map(d => Object.assign({}, d));
+    navigator.mediaDevices.enumerateDevices = markNative(function enumerateDevices() {
+      return Promise.resolve(devices);
+    }, 'enumerateDevices');
+  }
+
+  // ---- automation conveniences ------------------------------------------
+  if (cfg.automation && cfg.spoof.shadow) {
+    const origAttach = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = markNative(function attachShadow(init) {
+      const root = origAttach.call(this, init);
+      try { Object.defineProperty(this, 'fakeShadowRoot',
+        {value: root, configurable: true, enumerable: false}); } catch (e) {}
+      return root;
+    }, 'attachShadow');
+  }
+})();
+"""
+
+
+def build_script(params: dict) -> str:
+    """Render the injection bundle with the profile parameters embedded."""
+    cfg = json.dumps(params, separators=(",", ":"), sort_keys=True)
+    return _SCRIPT_TEMPLATE.replace("__VEIL_CFG__", cfg)
+
+
+def install(page_cdp, params: dict) -> None:
+    """Install the bundle on an attached page session; applies to every new
+    document (including iframes) from now on.
+
+    Also pins UA/platform/accept-language and the UA-CH client-hint metadata
+    at the CDP layer (Network.setUserAgentOverride) so the HTTP ``User-Agent``
+    and ``Sec-CH-UA*`` headers agree with navigator.* — the gap pure-JS
+    spoofing leaves open.
+    """
+    page_cdp.call("Page.enable")
+    page_cdp.call("Network.enable")
+    page_cdp.call("Network.setUserAgentOverride",
+                  userAgent=params["userAgent"],
+                  acceptLanguage=params["acceptLanguage"],
+                  platform=params["navPlatform"],
+                  userAgentMetadata=params["userAgentMetadata"])
+    page_cdp.call("Page.addScriptToEvaluateOnNewDocument",
+                  source=build_script(params))

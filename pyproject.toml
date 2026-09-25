@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "veilbrowser"
+version = "0.1.0"
+description = "CloakBrowser-style fingerprint browser API on top of open-source fingerprint-chromium"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+cdp = ["websocket-client>=1.6"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+veilbrowser = "veilbrowser.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["veilbrowser*"]
+
+[tool.pytest.ini_options]
+markers = ["integration: needs the fingerprint-chromium binary"]
+testpaths = ["tests"]
