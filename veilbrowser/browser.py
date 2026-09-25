@@ -225,6 +225,27 @@ class Browser:
         self.stop()
 
 
+def _geo_align(profile: FingerprintProfile) -> FingerprintProfile:
+    """Query the exit IP through the configured proxy (local forwarder for
+    auth/socks5 upstreams, direct urllib for plain http) and fill unset
+    timezone/language. Fail-open: on any error the profile is untouched."""
+    from .geo import align_profile, query_geo
+    try:
+        up = parse_proxy_url(profile.proxy)
+    except Exception:
+        return profile
+    geo = None
+    if up.has_auth or up.scheme != "http":
+        fwd = LocalForwarder(up)
+        try:
+            geo = query_geo(local_port=fwd.local_port)
+        finally:
+            fwd.stop()
+    else:
+        geo = query_geo(proxy_url=f"http://{up.host}:{up.port}")
+    return align_profile(profile, geo) if geo else profile
+
+
 def _seed_webrtc_prefs(user_data_dir: str) -> None:
     """Disable non-proxied WebRTC before first launch so the real IP cannot
     leak around the proxy (Camoufox-style IP handling, pref-level)."""
@@ -269,7 +290,7 @@ def launch(profile: FingerprintProfile | None = None,
     """
     if engine not in ("js", "kernel", "both"):
         raise ValueError(f"unknown engine: {engine!r}")
-    profile = (profile or FingerprintProfile(seed=0)).resolved()
+    profile = profile or FingerprintProfile(seed=0)
     kernel_fp = engine in ("kernel", "both")
     binary = binary or default_binary(vanilla=engine == "js")
     if not binary:
@@ -280,6 +301,12 @@ def launch(profile: FingerprintProfile | None = None,
         raise RuntimeError(f"binary not executable: {binary}")
 
     udd = user_data_dir or tempfile.mkdtemp(prefix="veil-")
+
+    # GeoIP alignment must run before resolved(): the seed then fills only
+    # what the exit IP didn't already determine (unset timezone/language).
+    if profile.proxy and (profile.timezone is None or profile.language is None):
+        profile = _geo_align(profile)
+    profile = profile.resolved()
     if profile.proxy:
         _seed_webrtc_prefs(udd)
 
