@@ -80,7 +80,8 @@ class _WorkerScopeInjector(threading.Thread):
             session = event["params"]["sessionId"]
             ttype = event["params"]["targetInfo"]["type"]
             if ttype in ("service_worker", "shared_worker", "worker"):
-                call("Runtime.enable", session=session)
+                # No Runtime.enable: evaluate works without it and the enable
+                # is a detectable automation signal (console serialization).
                 call("Runtime.evaluate",
                      {"expression": self._script, "includeCommandLineAPI": False},
                      session=session)
