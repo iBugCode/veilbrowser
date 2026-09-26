@@ -156,6 +156,30 @@ _SCREENS = {
 }
 
 
+def screen_metrics(profile: FingerprintProfile) -> dict:
+    """Deterministic screen metrics shared by the JS engine and the kernel
+    flags (--fingerprint-screen-*), so both engines tell one story."""
+    import random
+    import hashlib
+
+    def rng(*salt: str) -> random.Random:
+        h = hashlib.sha256(f"{profile.seed}:{'|'.join(salt)}".encode()).digest()
+        return random.Random(int.from_bytes(h, "big"))
+
+    resolved = profile.resolved()
+    r_scr = rng("screen")
+    sw, sh = r_scr.choice(_SCREENS[resolved.platform])
+    taskbar = r_scr.choice((40, 48, 60, 72)) if resolved.platform == "windows" \
+        else r_scr.choice((24, 25, 38))
+    # Screen follows the fingerprint; window metrics stay real (media queries
+    # read the true viewport). The real host window size reaches the operator
+    # via screen.__width/__height — CloakBrowser-style.
+    return {"w": sw, "h": sh, "availW": sw, "availH": sh - taskbar,
+            "taskbar": taskbar,
+            "cd": r_scr.choice((24, 30)),
+            "dpr": 2 if resolved.platform == "macos" else 1}
+
+
 def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> dict:
     """Everything the JS bundle needs, derived deterministically from profile."""
     import random
@@ -192,16 +216,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
     r_gl = rng("webgl")
     gpu = r_gl.choice(_GPU_POOLS[resolved.platform])
 
-    r_scr = rng("screen")
-    sw, sh = r_scr.choice(_SCREENS[resolved.platform])
-    taskbar = r_scr.choice((40, 48, 60, 72)) if resolved.platform == "windows" \
-        else r_scr.choice((24, 25, 38))
-    # Screen follows the fingerprint; window metrics stay real (media queries
-    # read the true viewport). The real host window size reaches the operator
-    # via screen.__width/__height — CloakBrowser-style.
-    screen = {"w": sw, "h": sh, "availW": sw, "availH": sh - taskbar,
-              "cd": r_scr.choice((24, 30)),
-              "dpr": 2 if resolved.platform == "macos" else 1}
+    screen = screen_metrics(profile)
 
     r_dev = rng("devices")
     devices = []

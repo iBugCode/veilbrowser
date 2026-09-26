@@ -1,0 +1,83 @@
+--- a/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 16:02:09.010850016 +0000
++++ b/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 15:57:50.722823282 +0000
+@@ -3909,6 +3909,7 @@
+       switches::kFingerprintScreenHeight,
+       switches::kFingerprintScreenAvailWidth,
+       switches::kFingerprintScreenAvailHeight,
++      "headless",
+       switches::kFingerprintDeviceScaleFactor,
+       switches::kFingerprintHardwareConcurrency,
+       switches::kFingerprintPlatform,
+--- a/third_party/blink/renderer/core/dom/document.cc	2026-09-26 16:02:09.014850077 +0000
++++ b/third_party/blink/renderer/core/dom/document.cc	2026-09-26 15:57:50.722823282 +0000
+@@ -36,6 +36,7 @@
+ 
+ #include "base/auto_reset.h"
+ #include "base/command_line.h"
++#include "ui/gfx/switches.h"
+ #include "base/containers/adapters.h"
+ #include "base/dcheck_is_on.h"
+ #include "base/debug/dump_without_crashing.h"
+@@ -9360,6 +9361,11 @@
+ }
+ 
+ bool Document::hasFocus() const {
++  // Headless masking: a headful session nearly always reports focus.
++  static const bool headless =
++      base::CommandLine::ForCurrentProcess()->HasSwitch(gfx::switches::kHeadless);
++  if (headless)
++    return GetPage() != nullptr;
+   return GetPage() && GetPage()->GetFocusController().IsDocumentFocused(*this);
+ }
+ 
+--- a/third_party/blink/renderer/modules/notifications/notification.cc	2026-09-26 16:02:09.014850077 +0000
++++ b/third_party/blink/renderer/modules/notifications/notification.cc	2026-09-26 15:57:50.722823282 +0000
+@@ -34,6 +34,8 @@
+ #include <utility>
+ 
+ #include "base/task/single_thread_task_runner.h"
++#include "base/command_line.h"
++#include "ui/gfx/switches.h"
+ #include "base/unguessable_token.h"
+ #include "mojo/public/cpp/bindings/pending_remote.h"
+ #include "third_party/blink/public/common/notifications/notification_constants.h"
+@@ -448,6 +450,13 @@
+       status = mojom::blink::PermissionStatus::DENIED;
+   }
+ 
++  // Headless masking: raw headless denies everything; a headful profile
++  // reports "default" until the user decides.
++  static const bool headless =
++      base::CommandLine::ForCurrentProcess()->HasSwitch(gfx::switches::kHeadless);
++  if (headless && status == mojom::blink::PermissionStatus::DENIED)
++    status = mojom::blink::PermissionStatus::ASK;
++
+   return V8NotificationPermission(PermissionToV8Enum(status));
+ }
+ 
+--- a/third_party/blink/renderer/modules/permissions/permissions.cc	2026-09-26 16:02:09.014850077 +0000
++++ b/third_party/blink/renderer/modules/permissions/permissions.cc	2026-09-26 15:57:50.722823282 +0000
+@@ -8,6 +8,8 @@
+ #include <utility>
+ 
+ #include "base/metrics/histogram_functions.h"
++#include "base/command_line.h"
++#include "ui/gfx/switches.h"
+ #include "third_party/blink/public/common/permissions/permission_utils.h"
+ #include "third_party/blink/public/mojom/page/page.mojom-blink.h"
+ #include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
+@@ -276,6 +278,14 @@
+       resolver->GetExecutionContext()->IsContextDestroyed())
+     return;
+ 
++  // Headless masking: raw headless denies every permission; report the
++  // headful "prompt" state instead.
++  static const bool headless =
++      base::CommandLine::ForCurrentProcess()->HasSwitch(gfx::switches::kHeadless);
++  if (headless && result &&
++      result->status == mojom::blink::PermissionStatus::DENIED)
++    result->status = mojom::blink::PermissionStatus::ASK;
++
+   PermissionStatusListener* listener = GetOrCreatePermissionStatusListener(
+       std::move(result), std::move(descriptor));
+   if (listener)

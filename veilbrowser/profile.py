@@ -121,6 +121,12 @@ class FingerprintProfile:
                 flags.append(f"--fingerprint-hardware-concurrency={self.hardware_concurrency}")
             if self.timezone:
                 flags.append(f"--timezone={self.timezone}")
+            from .inject import screen_metrics
+            sm = screen_metrics(self)
+            flags.append(f"--fingerprint-screen-width={sm['w']}")
+            flags.append(f"--fingerprint-screen-height={sm['h']}")
+            flags.append(f"--fingerprint-screen-avail-width={sm['availW']}")
+            flags.append(f"--fingerprint-screen-avail-height={sm['availH']}")
         if self.language:
             flags.append(f"--lang={self.language}")
             flags.append(f"--accept-lang={self.accept_language()}")

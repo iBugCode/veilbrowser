@@ -1,0 +1,145 @@
+--- a/components/ungoogled/ungoogled_switches.cc	2026-09-26 16:00:53.349672328 +0000
++++ b/components/ungoogled/ungoogled_switches.cc	2026-09-26 15:54:53.680049851 +0000
+@@ -36,6 +36,12 @@
+ // Specify the device scale factor
+ const char kFingerprintDeviceScaleFactor[] = "fingerprint-device-scale-factor";
+ 
++// Specify the available screen width (defaults to the screen width)
++const char kFingerprintScreenAvailWidth[] = "fingerprint-screen-avail-width";
++
++// Specify the available screen height (defaults to the screen height)
++const char kFingerprintScreenAvailHeight[] = "fingerprint-screen-avail-height";
++
+ // Specify the number of CPU cores
+ const char kFingerprintHardwareConcurrency[] = "fingerprint-hardware-concurrency";
+ 
+--- a/components/ungoogled/ungoogled_switches.h	2026-09-26 16:00:53.349672328 +0000
++++ b/components/ungoogled/ungoogled_switches.h	2026-09-26 15:54:53.680049851 +0000
+@@ -21,6 +21,8 @@
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kDisableSpoofing[];
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintScreenWidth[];
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintScreenHeight[];
++COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintScreenAvailWidth[];
++COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintScreenAvailHeight[];
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintDeviceScaleFactor[];
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintHardwareConcurrency[];
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintPlatform[];
+--- a/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 16:00:53.349672328 +0000
++++ b/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 15:57:50.722823282 +0000
+@@ -3907,6 +3907,8 @@
+       switches::kDisableSpoofing,
+       switches::kFingerprintScreenWidth,
+       switches::kFingerprintScreenHeight,
++      switches::kFingerprintScreenAvailWidth,
++      switches::kFingerprintScreenAvailHeight,
+       "headless",
+       switches::kFingerprintDeviceScaleFactor,
+       switches::kFingerprintHardwareConcurrency,
+--- a/third_party/blink/renderer/core/frame/screen.idl	2026-09-26 16:00:53.349672328 +0000
++++ b/third_party/blink/renderer/core/frame/screen.idl	2026-09-26 15:54:53.680049851 +0000
+@@ -43,6 +43,11 @@
+     [Measure] readonly attribute long availLeft;
+     [Measure] readonly attribute long availTop;
+ 
++    // Non-standard (veilbrowser): the real host window size behind the
++    // fingerprint screen, as an operator diagnostics escape hatch.
++    readonly attribute long __width;
++    readonly attribute long __height;
++
+     // Fired when the window’s screen or that screen's attributes change.
+     // https://w3c.github.io/window-management/
+     [SecureContext, MeasureAs=WindowScreenChange] attribute EventHandler onchange;
+--- a/third_party/blink/renderer/core/frame/screen.h	2026-09-26 16:00:53.349672328 +0000
++++ b/third_party/blink/renderer/core/frame/screen.h	2026-09-26 15:54:53.680049851 +0000
+@@ -66,6 +66,10 @@
+   int availHeight() const;
+   int availWidth() const;
+ 
++  // Real host window size (screen.__width / screen.__height).
++  int realOuterWidth() const;
++  int realOuterHeight() const;
++
+   void Trace(Visitor*) const override;
+ 
+   // EventTarget:
+--- a/third_party/blink/renderer/core/frame/screen.cc	2026-09-26 16:00:53.349672328 +0000
++++ b/third_party/blink/renderer/core/frame/screen.cc	2026-09-26 15:54:53.680049851 +0000
+@@ -28,6 +28,10 @@
+ 
+ #include "third_party/blink/renderer/core/frame/screen.h"
+ 
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
++#include "components/ungoogled/ungoogled_switches.h"
++
+ #include "base/numerics/safe_conversions.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+@@ -41,6 +45,21 @@
+ 
+ namespace blink {
+ 
++namespace {
++int FingerprintScreenDimension(const char* switch_name, int real) {
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switch_name)) {
++    int parsed = 0;
++    if (base::StringToInt(command_line->GetSwitchValueASCII(switch_name),
++                          &parsed) &&
++        parsed > 0) {
++      return parsed;
++    }
++  }
++  return real;
++}
++}  // namespace
++
+ Screen::Screen(LocalDOMWindow* window, int64_t display_id)
+     : ExecutionContextClient(window), display_id_(display_id) {}
+ 
+@@ -90,13 +109,25 @@
+ int Screen::height() const {
+   if (!DomWindow())
+     return 0;
+-  return GetRect(/*available=*/false).height();
++  return FingerprintScreenDimension(switches::kFingerprintScreenHeight,
++                                    GetRect(/*available=*/false).height());
+ }
+ 
+ int Screen::width() const {
+   if (!DomWindow())
+     return 0;
+-  return GetRect(/*available=*/false).width();
++  return FingerprintScreenDimension(switches::kFingerprintScreenWidth,
++                                    GetRect(/*available=*/false).width());
++}
++
++int Screen::realOuterWidth() const {
++  LocalDOMWindow* window = DomWindow();
++  return window ? window->outerWidth() : 0;
++}
++
++int Screen::realOuterHeight() const {
++  LocalDOMWindow* window = DomWindow();
++  return window ? window->outerHeight() : 0;
+ }
+ 
+ unsigned Screen::colorDepth() const {
+@@ -133,13 +164,15 @@
+ int Screen::availHeight() const {
+   if (!DomWindow())
+     return 0;
+-  return GetRect(/*available=*/true).height();
++  return FingerprintScreenDimension(switches::kFingerprintScreenAvailHeight,
++                                    GetRect(/*available=*/true).height());
+ }
+ 
+ int Screen::availWidth() const {
+   if (!DomWindow())
+     return 0;
+-  return GetRect(/*available=*/true).width();
++  return FingerprintScreenDimension(switches::kFingerprintScreenAvailWidth,
++                                    GetRect(/*available=*/true).width());
+ }
+ 
+ void Screen::Trace(Visitor* visitor) const {
