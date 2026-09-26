@@ -59,6 +59,19 @@ _GENERIC_FAMILIES = (
     "ui-serif", "ui-sans-serif", "ui-monospace", "math", "fangsong", "emoji",
 )
 
+
+def _font_data_for(platform: str) -> dict[str, str]:
+    """Metric-compatible clone fonts for whitelist families the host has no
+    glyph files for, as data: URLs (see fontpack.py). Only families present
+    in the platform whitelist are embedded, so the bundle stays small."""
+    from .fontpack import METRIC_FONT_DATA
+    out = {}
+    for fam in _FONT_POOLS[platform]:
+        b64 = METRIC_FONT_DATA.get(fam.lower())
+        if b64:
+            out[fam] = "data:font/woff2;base64," + b64
+    return out
+
 # Platform-plausible speechSynthesis voices. Chrome adds its own "Google …"
 # network voices on every OS; the others follow what the OS ships. A voice
 # matching the profile language is appended so de-DE sessions don't speak
@@ -302,6 +315,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
         "webrtcIp": resolved.webrtc_ip,
         "colorScheme": color_scheme,
         "fonts": list(_FONT_POOLS[resolved.platform]),
+        "fontData": _font_data_for(resolved.platform),
         "userAgentMetadata": {
             "brands": [{"brand": b["brand"].split(";")[0], "version": b["version"]}
                        for b in brands],
@@ -788,6 +802,63 @@ _SCRIPT_TEMPLATE = r"""
         Object.defineProperty(RealFontFace.prototype, 'constructor',
           {value: VeilFontFace, writable: true, configurable: true});
       } catch (e) {}
+    }
+
+    // Metric-compatible clone fonts: whitelist families the Linux host has
+    // no glyph files for are backed by real metric-compatible fonts
+    // (Liberation/Carlito/Caladea/Gelasio — data: URLs, see fontpack.py),
+    // so measureText widths match real Windows/macOS Chrome instead of the
+    // generic fallback. Registered before any page script runs; hidden
+    // from FontFaceSet enumeration since a real system font never shows
+    // up there.
+    const fontData = cfg.fontData || {};
+    if (typeof FontFace !== 'undefined' && typeof document !== 'undefined' &&
+        document.fonts && Object.keys(fontData).length) {
+      const veilFaces = new Set();
+      for (const fam in fontData) {
+        try {
+          const ff = new FontFace(fam, `url(${fontData[fam]})`);
+          document.fonts.add(ff);
+          veilFaces.add(ff);
+          ff.load().catch(() => {});
+        } catch (e) {}
+      }
+      if (veilFaces.size) {
+        const origForEach = FontFaceSet.prototype.forEach;
+        FontFaceSet.prototype.forEach = nativeMethod(function forEach(cb, thisArg) {
+          origForEach.call(this, function (face) {
+            if (veilFaces.has(face)) return;
+            cb.call(thisArg, face);
+          }, this);
+        }, 'forEach');
+        const origIterator = FontFaceSet.prototype[Symbol.iterator];
+        FontFaceSet.prototype[Symbol.iterator] = function entries() {
+          const it = origIterator.call(this);
+          return {
+            next: nativeMethod(function next() {
+              for (;;) {
+                const r = it.next.call(it);
+                if (r.done || !veilFaces.has(r.value)) return r;
+              }
+            }, 'next'),
+            [Symbol.iterator]: function () { return this; },
+          };
+        };
+        const origSize = Object.getOwnPropertyDescriptor(FontFaceSet.prototype, 'size');
+        if (origSize && origSize.get) {
+          const sizeGet = origSize.get;
+          Object.defineProperty(FontFaceSet.prototype, 'size', {
+            get: markNative(function size() {
+              let n = 0;
+              origForEach.call(this, function (face) {
+                if (!veilFaces.has(face)) n++;
+              });
+              return n;
+            }, 'size'),
+            set: undefined, configurable: true, enumerable: true,
+          });
+        }
+      }
     }
   }
 

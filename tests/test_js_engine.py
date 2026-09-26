@@ -529,6 +529,30 @@ class TestJsEngineCoherence:
         finally:
             b.stop()
 
+    def test_metric_fonts_measured_and_hidden(self, js_probe_page):
+        """Whitelist families the host has no glyphs for measure with real
+        metric-compatible widths (Liberation/Carlito clones), and the
+        operator fonts stay out of FontFaceSet enumeration."""
+        prof = _resolved(401, platform="windows")
+        params = js_params(prof)
+        assert set(params["fontData"]) >= {"Arial", "Calibri"}
+        b, page = js_probe_page(prof)
+        r = page.evaluate(
+            "(async () => {"
+            "  await document.fonts.ready;"
+            "  const c = document.createElement('canvas');"
+            "  const ctx = c.getContext('2d');"
+            "  const W = f => { ctx.font = f; return ctx.measureText('Hello World Test').width; };"
+            "  return [W('12px Arial'), W('12px sans-serif'), W('12px Calibri'),"
+            "          document.fonts.check('12px Arial'),"
+            "          [...document.fonts].length, document.fonts.size];"
+            "})()", await_promise=True)
+        arial, generic, calibri = r[0], r[1], r[2]
+        assert abs(arial - generic) > 0.5, "Arial measured as the generic fallback"
+        assert abs(calibri - generic) > 0.5, "Calibri measured as the generic fallback"
+        assert r[3] is True
+        assert r[4] == 0 and r[5] == 0
+
     def test_headless_env_masked(self, js_probe_page):
         """headless=new leaks: Notification/permissions 'denied' and
         document.hasFocus() false — all headful values now."""
