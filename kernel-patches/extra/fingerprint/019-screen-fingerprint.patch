@@ -1,4 +1,4 @@
---- a/components/ungoogled/ungoogled_switches.cc	2026-09-26 16:00:53.349672328 +0000
+--- a/components/ungoogled/ungoogled_switches.cc	2026-09-26 17:36:14.461154651 +0000
 +++ b/components/ungoogled/ungoogled_switches.cc	2026-09-26 15:54:53.680049851 +0000
 @@ -36,6 +36,12 @@
  // Specify the device scale factor
@@ -13,7 +13,7 @@
  // Specify the number of CPU cores
  const char kFingerprintHardwareConcurrency[] = "fingerprint-hardware-concurrency";
  
---- a/components/ungoogled/ungoogled_switches.h	2026-09-26 16:00:53.349672328 +0000
+--- a/components/ungoogled/ungoogled_switches.h	2026-09-26 17:36:14.461154651 +0000
 +++ b/components/ungoogled/ungoogled_switches.h	2026-09-26 15:54:53.680049851 +0000
 @@ -21,6 +21,8 @@
  COMPONENT_EXPORT(UNGOOGLED) extern const char kDisableSpoofing[];
@@ -24,7 +24,7 @@
  COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintDeviceScaleFactor[];
  COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintHardwareConcurrency[];
  COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintPlatform[];
---- a/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 16:00:53.349672328 +0000
+--- a/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 17:36:14.461154651 +0000
 +++ b/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 15:57:50.722823282 +0000
 @@ -3907,6 +3907,8 @@
        switches::kDisableSpoofing,
@@ -35,21 +35,44 @@
        "headless",
        switches::kFingerprintDeviceScaleFactor,
        switches::kFingerprintHardwareConcurrency,
---- a/third_party/blink/renderer/core/frame/screen.idl	2026-09-26 16:00:53.349672328 +0000
-+++ b/third_party/blink/renderer/core/frame/screen.idl	2026-09-26 15:54:53.680049851 +0000
+--- a/tools/idl_parser/idl_lexer.py	2026-09-26 17:36:14.461154651 +0000
++++ b/tools/idl_parser/idl_lexer.py	2026-09-26 17:32:51.059393955 +0000
+@@ -159,14 +159,16 @@
+ 
+   # A symbol or keyword.
+   def t_KEYWORD_OR_SYMBOL(self, t):
+-    r'[_-]?[A-Za-z][A-Za-z_0-9-]*'
++    r'[_-]*[A-Za-z][A-Za-z_0-9-]*'
+ 
+     # All non-keywords are assumed to be symbols
+     t.type = self.keywords.get(t.value, 'identifier')
+ 
+-    # We strip leading underscores so that you can specify symbols with the same
+-    # value as a keywords (E.g. a dictionary named 'interface').
+-    if t.value[0] == '_':
++    # We strip a single leading underscore so that you can specify symbols
++    # with the same value as a keywords (E.g. a dictionary named 'interface').
++    # Two or more leading underscores are kept verbatim: veilbrowser exposes
++    # screen.__width / screen.__height through the IDL that way.
++    if t.value[0] == '_' and not t.value.startswith('__'):
+       t.value = t.value[1:]
+     return t
+ 
+--- a/third_party/blink/renderer/core/frame/screen.idl	2026-09-26 17:36:14.461154651 +0000
++++ b/third_party/blink/renderer/core/frame/screen.idl	2026-09-26 17:33:23.811647673 +0000
 @@ -43,6 +43,11 @@
      [Measure] readonly attribute long availLeft;
      [Measure] readonly attribute long availTop;
  
 +    // Non-standard (veilbrowser): the real host window size behind the
 +    // fingerprint screen, as an operator diagnostics escape hatch.
-+    readonly attribute long __width;
-+    readonly attribute long __height;
++    [ImplementedAs=realOuterWidth] readonly attribute long __width;
++    [ImplementedAs=realOuterHeight] readonly attribute long __height;
 +
      // Fired when the window’s screen or that screen's attributes change.
      // https://w3c.github.io/window-management/
      [SecureContext, MeasureAs=WindowScreenChange] attribute EventHandler onchange;
---- a/third_party/blink/renderer/core/frame/screen.h	2026-09-26 16:00:53.349672328 +0000
+--- a/third_party/blink/renderer/core/frame/screen.h	2026-09-26 17:36:14.461154651 +0000
 +++ b/third_party/blink/renderer/core/frame/screen.h	2026-09-26 15:54:53.680049851 +0000
 @@ -66,6 +66,10 @@
    int availHeight() const;
@@ -62,7 +85,7 @@
    void Trace(Visitor*) const override;
  
    // EventTarget:
---- a/third_party/blink/renderer/core/frame/screen.cc	2026-09-26 16:00:53.349672328 +0000
+--- a/third_party/blink/renderer/core/frame/screen.cc	2026-09-26 17:36:14.461154651 +0000
 +++ b/third_party/blink/renderer/core/frame/screen.cc	2026-09-26 15:54:53.680049851 +0000
 @@ -28,6 +28,10 @@
  
