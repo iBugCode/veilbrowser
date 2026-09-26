@@ -1,18 +1,6 @@
---- a/third_party/blink/renderer/core/layout/layout_theme.cc	2026-09-26 16:02:09.022850202 +0000
-+++ b/third_party/blink/renderer/core/layout/layout_theme.cc	2026-09-26 16:00:08.048966528 +0000
-@@ -21,9 +21,11 @@
- 
- #include "third_party/blink/renderer/core/layout/layout_theme.h"
- 
-+#include "base/command_line.h"
- #include "build/build_config.h"
- #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
- #include "third_party/blink/public/resources/grit/blink_resources.h"
-+#include "ui/gfx/switches.h"
- #include "third_party/blink/public/strings/grit/blink_strings.h"
- #include "third_party/blink/public/web/blink.h"
- #include "third_party/blink/renderer/core/css_value_keywords.h"
-@@ -615,6 +617,18 @@
+--- a/third_party/blink/renderer/core/layout/layout_theme.cc	2026-09-26 16:48:22.159423945 +0000
++++ b/third_party/blink/renderer/core/layout/layout_theme.cc	2026-09-26 16:47:45.174809003 +0000
+@@ -616,6 +616,18 @@
                                 mojom::blink::ColorScheme color_scheme,
                                 const ui::ColorProvider* color_provider,
                                 bool can_expose_accent_color) const {
@@ -21,7 +9,7 @@
 +  // session (ActiveText is link blue on Windows Chrome, not the red spec
 +  // default).
 +  static const bool headless =
-+      base::CommandLine::ForCurrentProcess()->HasSwitch(gfx::switches::kHeadless);
++      base::CommandLine::ForCurrentProcess()->HasSwitch("headless");
 +  if (headless) {
 +    if (css_value_id == CSSValueID::kActivetext)
 +      return Color::FromRGBA32(0xFF0000FF);
