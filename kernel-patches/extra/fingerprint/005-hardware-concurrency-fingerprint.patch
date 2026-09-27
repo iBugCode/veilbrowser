@@ -30,17 +30,35 @@ index f5c0db2d1b..da69d2f24a 100644
    return static_cast<unsigned>(base::SysInfo::NumberOfProcessors());
  }
  
-diff --git a/third_party/blink/renderer/core/frame/navigator_device_memory.cc b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
-index 05fa33e456..792ee43f32 100644
 --- a/third_party/blink/renderer/core/frame/navigator_device_memory.cc
 +++ b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
-@@ -12,7 +12,8 @@
+@@ -4,6 +4,10 @@
+ 
+ #include "third_party/blink/renderer/core/frame/navigator_device_memory.h"
+ 
++#include <cstdlib>
++
++#include "base/command_line.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "third_party/blink/public/common/device_memory/approximated_device_memory.h"
+ #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+@@ -12,6 +16,18 @@
  namespace blink {
  
  float NavigatorDeviceMemory::deviceMemory() const {
--  return ApproximatedDeviceMemory::GetApproximatedDeviceMemory();
-+  return 8;
-+  // return ApproximatedDeviceMemory::GetApproximatedDeviceMemory();
++  // Seed-derived within the spec pool: the Device Memory API caps the
++  // reported value at 8 GiB (higher values are impossible in stock Chrome
++  // and would themselves be a fingerprint signal). Weighted toward 8, the
++  // dominant real-desktop value.
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint)) {
++    std::string fingerprint_str =
++        command_line->GetSwitchValueASCII(switches::kFingerprint);
++    uint32_t fingerprint = static_cast<uint32_t>(std::stoull(fingerprint_str));
++    static constexpr float kPool[] = {8, 8, 8, 4, 8, 2};
++    return kPool[fingerprint % 6];
++  }
+   return ApproximatedDeviceMemory::GetApproximatedDeviceMemory();
  }
  
- }  // namespace blink

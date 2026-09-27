@@ -113,7 +113,7 @@ def check(results: dict) -> list[tuple[str, bool, str]]:
                  and results.get("uaPlatform", "").lower()[:3] in
                  _platform_key(results.get("platform", "")),
                  f"{results.get('platform')} / {results.get('uaPlatform')}"))
-    rows.append(("deviceMemory ∈ {8,16,32}", results.get("deviceMemory") in (8, 16, 32),
+    rows.append(("deviceMemory ∈ {8,4,2} (spec 封顶 8)", results.get("deviceMemory") in (8, 4, 2),
                  str(results.get("deviceMemory"))))
     rows.append(("时区生效", bool(results.get("timezone")), str(results.get("timezone"))))
     rows.append(("语言生效", bool(results.get("languages")), str(results.get("languages"))))

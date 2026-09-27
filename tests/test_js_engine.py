@@ -121,7 +121,7 @@ class TestJsEngineIdentity:
         prof = _resolved(77, platform="windows", hardware_concurrency=4)
         b, page = js_probe_page(prof)
         assert page.evaluate("navigator.hardwareConcurrency") == 4
-        assert page.evaluate("[8,16,32].includes(navigator.deviceMemory)")
+        assert page.evaluate("[8,4,2].includes(navigator.deviceMemory)")
 
     def test_timezone_coherent_with_language_and_real_offset(self, js_probe_page):
         prof = _resolved(501, language="ja-JP")  # tz pool: Asia/Tokyo

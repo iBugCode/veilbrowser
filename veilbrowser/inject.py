@@ -300,7 +300,7 @@ def js_params(profile: FingerprintProfile, chrome_full: str | None = None) -> di
         "timezone": resolved.timezone,
         "timezoneName": _tz_display_name(resolved.timezone),
         "hardwareConcurrency": resolved.hardware_concurrency,
-        "deviceMemory": r_gl.choice([8, 8, 16, 32]),
+        "deviceMemory": r_gl.choice([8, 8, 8, 4, 8, 2]),  # Device Memory API caps at 8
         "webglVendor": gpu[0],
         "webglRenderer": gpu[1],
         "screen": screen,

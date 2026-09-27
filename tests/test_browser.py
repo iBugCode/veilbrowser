@@ -70,7 +70,7 @@ class TestHardwareAndLocale:
         for seed in (21, 22, 23, 24):
             b, page = probe_page(FingerprintProfile(seed=seed))
             seen.add(collect(page)["deviceMemory"])
-        assert seen <= {8, 16, 32}
+        assert seen <= {8, 4, 2}  # Device Memory API caps at 8
         assert len(seen) > 1
 
     def test_hardware_concurrency_flag(self, probe_page):

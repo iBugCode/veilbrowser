@@ -45,12 +45,14 @@ class ClientHello:
     def ja3_normalized(self) -> str:
         # Extensions are compared order-insensitively: BoringSSL permutes
         # extension order per connection, so only the SET is identity.
+        # supported_groups carries per-connection GREASE curves too
+        # (X25519GREASE etc.), point_formats is constant {0}.
         return ",".join([
             self.version,
             "-".join(self._norm(self.ciphers)),
             "-".join(sorted(self._norm(self.extensions))),
-            "-".join(self.curves),
-            "-".join(self.point_formats),
+            "-".join(self._norm(self.curves)),
+            "-".join(self._norm(self.point_formats)),
         ])
 
     @property
