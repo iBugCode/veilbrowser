@@ -54,9 +54,13 @@ def test_kernel_screen_cpp_spoof_and_real_expose(make_browser):
 
 def test_kernel_headless_masking(make_browser):
     """Under --headless=new the kernel reports non-automation signals
-    (patch 020 gates on the 'headless' switch)."""
+    (patch 020 gates on the 'headless' switch). Notification/permissions need
+    a SECURE context: stock Chrome also reports 'denied' on insecure origins,
+    so the masking only applies to https/file pages."""
+    from veilbrowser.probe import open_probe_page
+
     b = make_browser(FingerprintProfile(seed=77, platform="windows"))
-    page = b.new_page("about:blank")
+    page = open_probe_page(b)
     assert page.evaluate("Notification.permission") == "default"
     state = page.evaluate(
         "navigator.permissions.query({name:'notifications'})"

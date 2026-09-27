@@ -1,18 +1,25 @@
---- a/third_party/blink/renderer/core/layout/layout_theme.cc	2026-09-26 16:48:22.159423945 +0000
-+++ b/third_party/blink/renderer/core/layout/layout_theme.cc	2026-09-26 16:47:45.174809003 +0000
-@@ -616,6 +616,18 @@
+--- a/third_party/blink/renderer/core/layout/layout_theme.cc
++++ b/third_party/blink/renderer/core/layout/layout_theme.cc
+@@ -21,6 +21,7 @@
+ 
+ #include "third_party/blink/renderer/core/layout/layout_theme.h"
+ 
++#include "base/command_line.h"
+ #include "build/build_config.h"
+ #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
+ #include "third_party/blink/public/resources/grit/blink_resources.h"
+@@ -615,6 +616,17 @@
                                 mojom::blink::ColorScheme color_scheme,
                                 const ui::ColorProvider* color_provider,
                                 bool can_expose_accent_color) const {
 +  // Headless masking: the headless color provider computes garbage for some
-+  // CSS system colors; report the Windows light palette like a headful
-+  // session (ActiveText is link blue on Windows Chrome, not the red spec
-+  // default).
++  // CSS system colors; report blink's stock palette like a headful session
++  // (ActiveText keeps the cross-platform red default, AARRGGBB).
 +  static const bool headless =
 +      base::CommandLine::ForCurrentProcess()->HasSwitch("headless");
 +  if (headless) {
 +    if (css_value_id == CSSValueID::kActivetext)
-+      return Color::FromRGBA32(0xFF0000FF);
++      return Color::FromRGBA32(0xFFFF0000);
 +    return DefaultSystemColor(css_value_id, color_scheme, color_provider,
 +                              can_expose_accent_color);
 +  }
