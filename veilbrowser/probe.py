@@ -96,7 +96,17 @@ def open_probe_page(browser):
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("<!DOCTYPE html><html><head><title>veil-probe</title></head>"
                 "<body>veilbrowser probe</body></html>\n")
-    return browser.new_page("file://" + path)
+    page = browser.new_page("file://" + path)
+    # /json/new races target creation against the navigation: evaluations can
+    # land on the pending about:blank document (insecure context — secure-only
+    # APIs like Notification.permission would report the wrong surface).
+    import time
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if page.evaluate("location.protocol + '|' + document.readyState") == "file:|complete":
+            return page
+        time.sleep(0.05)
+    raise RuntimeError("probe page never reached file:// complete")
 
 
 def check(results: dict) -> list[tuple[str, bool, str]]:
