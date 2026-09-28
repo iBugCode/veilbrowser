@@ -132,22 +132,51 @@ getter 原生伪装(toString 检测)、iframe 注入覆盖、**HTTP 头与 navig
 GREASE/扩展序随机性已归一)、**人类化输入 isTrusted E2E**(贝塞尔鼠标/键入/滚动
 全部以 trusted 事件落点)、**console getter 静默**(无 Runtime.enable 序列化)。
 
-## 公开检测工具实测(v0.3.0 验收,v0.4.0–v0.7.0 复验)
+## 公开检测工具实测(v0.7.0 主流站全量巡检)
 
-- **bot.sannysoft.com:58/58 全部通过**(含 WebDriver New、Headless、
-  MQ_SCREEN 媒体查询组)。
-- **CreepJS(v0.6.0):0 lie、headless 0%、stealth 0%、like headless 6%**
-  (v0.5.0 为 38%/33%/20%;残余 6% 为 light 配色档位的
-  prefers-color-scheme 项,dark 档位种子为 0%);0 控制台错误、0 异常;
-  DedicatedWorker 与 ServiceWorker 作用域的 UA/UA-CH/平台/时区/GPU 全部
-  与页面自洽(置信度 high);字体面不再暴露宿主 Linux 字体集。
-- **v0.7.0(自编译 veil-chromium 153 内核,windows-us-office seed=1001)**:
-  engine="both" 旗舰配置 sannysoft 0 失败、CreepJS 0 lie / headless 0% /
-  stealth 0% / like headless 6%,与 v0.6.0 JS 引擎持平——C++ 内核身份 +
-  JS 遮蔽层叠加。纯 `engine="kernel"` 模式 sannysoft 亦 0 失败、0 lie,
-  但 like-headless 38%(JS 引擎的 headless 环境遮蔽不参与,需 `both`)。
-- Canvas 噪声会被 CreepJS 标注 "rgba noise" —— 这是噪声类伪装的固有代价
-  (fingerprint-chromium 同理),换来的是跨实例不可关联。
+旗舰配置(自编译 veil-chromium 153 内核 + JS 双引擎,windows-us-office
+seed=1001,headless),证据文本存 `/tmp/sitecheck/`:
+
+- **bot.sannysoft.com:30/30 检查项全部通过、0 失败**(含 WebDriver New、
+  Headless、MQ_SCREEN 媒体查询组)。
+- **CreepJS:0 lie、headless 0%、stealth 0%、like headless 6%**
+  (残余 6% 为 light 配色档位的 prefers-color-scheme 项,dark 档位种子为
+  0%);0 控制台错误、0 异常;DedicatedWorker 与 ServiceWorker 作用域的
+  UA/UA-CH/平台/时区/GPU 全部与页面自洽(置信度 high);字体面不再暴露
+  宿主 Linux 字体集。
+- **BrowserScan /bot-detection**:"No bots detected — the visitor could
+  be a human using a regular browser."
+- **Anti-CAPTCHA reCAPTCHA v3 评分**(antcpt.com/score_detector):
+  **0.9 / 1.0**(≥0.7 即快速验证码档,Google 判定人类交互)。
+- **deviceandbrowserinfo.com /are_you_a_bot**:`"isBot": false`、
+  `"hasBotUserAgent": false`。
+- **Fingerprint Pro 实时识别**(fingerprint.com/github 与
+  demo.fingerprint.com/playground):识别成功、Confidence 0.98,
+  **Bot / Incognito Mode / Developer Tools 全部 Not detected**。诚实记录:
+  其 Browser Tampering 信号为 Yes(canvas 噪声类方案的固有代价),
+  VPN/VM 信号来自机房 IP 本身(下条)。
+- **BroTector**(ttlns.github.io/brotector):检测表 **Average 0、零检出
+  行**;humanize 走 CDP 受信点击,连 `Input.untrusted` 都不触发。巡检中
+  发现并修复:注入包装器内部原经 `Function.prototype.apply` 调用,会喂进
+  其 apply Proxy 陷阱并与 toString 伪装互递归(RangeError);现改用
+  document_start 捕获的原始 apply + toString 重入守卫,并有回归测试
+  (`test_wrappers_bypass_apply_hooks`)。
+- **PixelScan /bot-check**:"You're Definitely a Human",分项
+  Navigator(73)/Webdriver(37)/CDP(2)/UA(5)/Plugins/Languages 全部
+  **Clear**。/fingerprint-check 页面在本机房网络下始终停在 scanning
+  (四次尝试),环境不可达,非检测判定。
+- **iphey.com**:出口 IP 为机房段时,未对齐档位会被判 "Unreliable"
+  (location 失配);经 GeoIP 对齐(新加坡出口 → Asia/Singapore)后
+  **HARDWARE / SOFTWARE / LOCATION 全部 "Everything is fine"**,残余为
+  其 3 条 browser 内部启发式与机房 IP 的 Risk 42/medium
+  (Datacenter: true——环境因素,需住宅代理)。
+
+无代理直跑时,出口 IP 与档位时区的不一致会被 Fingerprint Pro
+(VPN: timezone mismatch)与 iphey(location 不一致)如实检出——这正是
+`veilbrowser.geo.align_profile` 存在的意义;生产部署应配置代理并让
+GeoIP 对齐档位。Canvas 噪声会被 CreepJS 标注 "rgba noise" —— 这是
+噪声类伪装的固有代价(fingerprint-chromium 同理),换来的是跨实例
+不可关联。
 
 ## 对标与路线图
 

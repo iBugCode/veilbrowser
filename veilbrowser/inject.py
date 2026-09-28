@@ -372,6 +372,11 @@ _SCRIPT_TEMPLATE = r"""
   }
   const nativeFns = new Map();
   const origFnToString = Function.prototype.toString;
+  // Detectors Proxy-wrap Function.prototype.apply and stringify every callee
+  // (brotector's SeleniumScriptInjectionHandler); routing our wrapper
+  // internals through `.apply` would feed that trap and loop with our own
+  // toString. Capture the pristine apply at document_start and use it.
+  const origFnApply = Function.prototype.apply;
   // Cross-realm toString: tools run lie checks from nested same-origin
   // iframes, so one realm's toString hook must recognize wrappers registered
   // by ANOTHER realm's bundle instance (Function.toString is per-realm, but
@@ -406,13 +411,22 @@ _SCRIPT_TEMPLATE = r"""
     // property; a plain function wrapper leaks both (creepjs 'failed new
     // instance error' / 'failed "prototype" in function' lie checks). Re-home
     // the implementation on a method-shorthand holder to inherit that shape.
-    const holder = { m(...args) { return fn.apply(this, args); } };
+    const holder = { m(...args) { return origFnApply.call(fn, this, args); } };
     return markNative(holder.m, name || fn.name);
   }
+  // Re-entrancy guard: detectors that wrap Function.prototype.toString
+  // themselves (brotector's SeleniumScriptInjectionHandler) can end up in
+  // our fallback calling their wrapper, whose handler asks for a toString
+  // again — unbounded mutual recursion (RangeError). While already inside
+  // this toString, never route back through the captured original.
+  let tsDepth = 0;
   Function.prototype.toString = nativeMethod(function toString() {
     const n = lookupNative(this);
     if (n !== undefined) return 'function ' + n + '() { [native code] }';
-    return origFnToString.call(this);
+    if (tsDepth > 0) return 'function ' + (this.name || '') + '() { [native code] }';
+    tsDepth++;
+    try { return origFnToString.call(this); }
+    finally { tsDepth--; }
   }, 'toString');
   function redefine(obj, prop, getter, setter) {
     let enumerable = true, have = null;

@@ -289,6 +289,28 @@ class TestJsEngineNoise:
             ".get.call(navigator)")
         assert v == "Win32"
 
+    def test_wrappers_bypass_apply_hooks(self, js_probe_page):
+        """Detectors Proxy-wrap Function.prototype.apply and stringify every
+        callee (brotector). Our wrapper internals must route through the
+        apply captured at document_start, invisible to page-installed hooks;
+        feeding the trap ended in a toString mutual recursion (RangeError)."""
+        b, page = js_probe_page(_resolved(68, platform="windows"))
+        r = page.evaluate("""(() => {
+          let hits = 0;
+          const orig = Function.prototype.apply;
+          Function.prototype.apply = new Proxy(orig, {
+            apply: (t, th, a) => { hits++; return Reflect.apply(t, th, a); }});
+          let out;
+          try {
+            const ctx = document.createElement('canvas').getContext('2d');
+            out = Object.prototype.toString.call(ctx);
+          } catch (e) { out = 'ERR:' + e.name; }
+          Function.prototype.apply = orig;
+          return [out, hits];
+        })()""")
+        assert r[0] == "[object CanvasRenderingContext2D]"
+        assert r[1] == 0, "wrapper internals routed through page's apply hook"
+
 
 class TestJsEngineFrames:
     def test_injection_covers_iframes(self, js_probe_page):
