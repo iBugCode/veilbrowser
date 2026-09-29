@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-[![CI](https://github.com/VEIL_OWNER/veilbrowser/actions/workflows/ci.yml/badge.svg)](https://github.com/VEIL_OWNER/veilbrowser/actions/workflows/ci.yml)
+[![CI](https://github.com/iBugCode/veilbrowser/actions/workflows/ci.yml/badge.svg)](https://github.com/iBugCode/veilbrowser/actions/workflows/ci.yml)
 ![Platform](https://img.shields.io/badge/platform-linux%20x86__64-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-informational)
 ![License](https://img.shields.io/badge/license-MIT-green)

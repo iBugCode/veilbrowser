@@ -3,7 +3,7 @@
 # runners have ~14 GB of disk and cannot build the kernel; run this
 # workflow on your own machine instead:
 #
-#   git clone https://github.com/VEIL_OWNER/veilbrowser && cd veilbrowser
+#   git clone https://github.com/iBugCode/veilbrowser && cd veilbrowser
 #   # register the runner, then dispatch this workflow — or simply run:
 #   bash scripts/build-kernel.sh dist/
 #
