@@ -406,7 +406,7 @@ class TestJsEngineWorkers:
         finally:
             b.stop()
 
-    def test_worker_http_ua_header_matches(self):
+    def test_worker_http_ua_header_matches(self, vanilla_path):
         """--user-agent at launch: worker fetches hit the wire with the
         spoofed UA (CDP override alone only covers the page session)."""
         from tests._proxies import TargetSite
@@ -414,7 +414,7 @@ class TestJsEngineWorkers:
         target = TargetSite()
         try:
             prof = from_preset("windows-us-office", seed=1001)
-            b = veilbrowser.launch(prof, engine="js",
+            b = veilbrowser.launch(prof, engine="js", binary=vanilla_path,
                                    extra_flags=["--proxy-bypass-list=<-loopback>"])
             try:
                 url = f"http://127.0.0.1:{target.port}/probe"
