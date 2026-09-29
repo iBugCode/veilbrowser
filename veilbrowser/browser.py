@@ -1,8 +1,11 @@
 """Launch a fingerprint browser kernel with a FingerprintProfile, CloakBrowser-style.
 
-Two engines: "js" injects our own fingerprint bundle into any kernel via CDP
-(default — survives kernel upgrades on vanilla ungoogled-chromium), "kernel"
-uses fingerprint-chromium's C++ patches, "both" stacks them.
+Injection strategies: "js" injects our own fingerprint bundle into any kernel
+via CDP (default — survives kernel upgrades on vanilla ungoogled-chromium),
+"kernel" uses fingerprint-chromium's C++ patches, "both" stacks them, and
+"native" runs the bundle that is compiled INTO the veil kernel
+(kernel-patches/extra/veil) — zero external injection, parameters delivered
+through the VEIL_PARAMS environment variable.
 """
 
 from __future__ import annotations
@@ -161,9 +164,12 @@ class Browser:
     devtools: DevTools
     user_data_dir: str
     proxy_arg: str | None = None
-    engine: str = "kernel"          # js | kernel | both
+    engine: str = "kernel"          # js | kernel | both | native
     kernel_version: str | None = None
     js_params: dict | None = None
+    veil_params: dict | None = None   # native engine: params handed via env
+    native_active: bool | None = None  # native engine: bundle confirmed running
+    proxy_check: dict | None = None   # async exit-IP self-check result
     _forwarder: LocalForwarder | None = None
     _cleanup_dir: bool = False
     _own_procs: list = field(default_factory=list, repr=False)
@@ -272,6 +278,52 @@ def _seed_webrtc_prefs(user_data_dir: str) -> None:
         json.dump(prefs, f)
 
 
+def _close_session_page(browser: "Browser", page: CDP) -> None:
+    """Close a target opened only for a background check."""
+    try:
+        info = page.call("Target.getTargetInfo")
+        browser.devtools.close_page(info["targetInfo"]["targetId"])
+    except Exception:
+        pass
+
+
+def _verify_proxy_async(b: "Browser", expected_ip: str) -> None:
+    """Fetch the exit IP through the browser's own network stack in the
+    background; a mismatch with the externally measured proxy exit means
+    Chrome is silently bypassing the proxy (CloakBrowser #157: authenticated
+    SOCKS5 falling back to a direct connection)."""
+    from .probe import check_exit_ip
+
+    def run() -> None:
+        try:
+            page = b.devtools.new_page_cdp("about:blank")
+            try:
+                b.proxy_check = check_exit_ip(page, expected_ip)
+            finally:
+                _close_session_page(b, page)
+        except Exception as exc:  # informational only — never break launch
+            b.proxy_check = {"error": str(exc), "expected": expected_ip}
+
+    threading.Thread(target=run, daemon=True, name="veil-proxy-check").start()
+
+
+def _verify_native_async(b: "Browser") -> None:
+    """Confirm the compiled-in bundle actually runs (an unpatched kernel
+    silently ignores VEIL_PARAMS — surface that as native_active=False)."""
+    def run() -> None:
+        try:
+            page = b.devtools.new_page_cdp("about:blank")
+            try:
+                b.native_active = bool(
+                    page.evaluate("typeof veilNativeCfg === 'function'"))
+            finally:
+                _close_session_page(b, page)
+        except Exception:
+            b.native_active = False
+
+    threading.Thread(target=run, daemon=True, name="veil-native-check").start()
+
+
 def launch(profile: FingerprintProfile | None = None,
            *,
            engine: str = "js",
@@ -289,6 +341,9 @@ def launch(profile: FingerprintProfile | None = None,
                    proof, works on vanilla ungoogled-chromium)
       * "kernel" — fingerprint-chromium's C++ patches
       * "both"   — kernel patches + our bundle on top
+      * "native" — the bundle compiled into the veil kernel; no CDP, no
+                   injection — requires a binary built with
+                   kernel-patches/extra/veil (scripts/build-kernel.sh)
 
     With engine="kernel", ``js_overlay=True`` additionally injects the JS
     bundle's canvas section only — fingerprint-chromium leaves pure-text
@@ -298,10 +353,13 @@ def launch(profile: FingerprintProfile | None = None,
     A proxy with credentials on the profile is transparently wrapped in a
     local authenticated forwarder (--proxy-server cannot auth).
     """
-    if engine not in ("js", "kernel", "both"):
+    if engine not in ("js", "kernel", "both", "native"):
         raise ValueError(f"unknown engine: {engine!r}")
+    if engine == "native" and js_overlay:
+        raise ValueError("engine='native' has nothing to overlay: the bundle "
+                         "is compiled into the kernel")
     profile = profile or FingerprintProfile(seed=0)
-    kernel_fp = engine in ("kernel", "both")
+    kernel_fp = engine in ("kernel", "both", "native")
     binary = binary or default_binary(vanilla=engine == "js")
     if not binary:
         raise RuntimeError(
@@ -325,15 +383,34 @@ def launch(profile: FingerprintProfile | None = None,
 
     js_params = None
     if engine in ("js", "both") or (engine == "kernel" and js_overlay):
-        from .inject import js_params
+        from .inject import js_params as make_js_params
         # kernel version from the binary path (DevTools reporting it would be
         # too late — the --user-agent switch below must be in the first spawn)
         mver = re.search(r"(\d+\.\d+\.\d+\.\d+)", binary)
         chrome_full = profile.brand_version or (mver.group(1) if mver else None)
-        js_params = js_params(profile, chrome_full)
+        js_params = make_js_params(profile, chrome_full)
         if engine == "kernel":  # overlay mode: canvas section only
             js_params["spoof"] = {k: False for k in js_params["spoof"]}
             js_params["spoof"]["canvas"] = True
+
+    veil_params: dict | None = None
+    if engine == "native":
+        # The kernel's compiled-in bundle reads its parameters from the
+        # VEIL_PARAMS environment variable; metric-clone fonts are baked into
+        # the binary, so they are stripped from the payload.
+        from .inject import js_params as make_js_params
+        mver = re.search(r"(\d+\.\d+\.\d+\.\d+)", binary)
+        chrome_full = profile.brand_version or (mver.group(1) if mver else None)
+        if chrome_full is None:
+            try:  # the kernel's own version keeps the UA stories consistent
+                out = subprocess.run([binary, "--version"], capture_output=True,
+                                     text=True, timeout=15).stdout or ""
+                vm = re.search(r"(\d+\.\d+\.\d+\.\d+)", out)
+                chrome_full = vm.group(1) if vm else None
+            except Exception:
+                chrome_full = None
+        veil_params = make_js_params(profile, chrome_full)
+        veil_params.pop("fontData", None)
 
     flags = [f"--user-data-dir={udd}",
              "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
@@ -372,9 +449,15 @@ def launch(profile: FingerprintProfile | None = None,
             proxy_arg = f"{up.scheme}://{up.host}:{up.port}"
         flags.append(f"--proxy-server={proxy_arg}")
 
+    env: dict | None = None
+    if veil_params is not None:
+        import json as _json
+        env = dict(os.environ)
+        env["VEIL_PARAMS"] = _json.dumps(veil_params, separators=(",", ":"),
+                                         sort_keys=True)
     proc = subprocess.Popen([binary] + flags,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            text=True)
+                            text=True, env=env)
 
     ws_url_holder: list[str] = []
     stderr_lines: list[str] = []
@@ -418,7 +501,12 @@ def launch(profile: FingerprintProfile | None = None,
                 devtools=devtools,
                 user_data_dir=flags[0].split("=", 1)[1],
                 proxy_arg=proxy_arg,
-                engine=engine, kernel_version=kernel_version, js_params=js_params)
+                engine=engine, kernel_version=kernel_version, js_params=js_params,
+                veil_params=veil_params)
+    if engine == "native":
+        _verify_native_async(b)
+    if profile.proxy and profile.webrtc_ip:
+        _verify_proxy_async(b, profile.webrtc_ip)
     if js_params:
         try:
             from .inject import build_script

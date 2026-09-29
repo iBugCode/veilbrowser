@@ -18,14 +18,15 @@ from .geo import align_profile, locale_for_country, query_geo
 from .inject import build_script, install, js_params
 from .profile import FingerprintProfile, PRESETS, from_preset
 from .humanize import HumanInput
-from .probe import check, collect, print_report
+from .probe import check, check_exit_ip, collect, print_report
 from .upgrade import latest_release, upgrade as upgrade_kernel
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "Browser", "CDP", "CDPError", "DevTools", "FingerprintProfile", "PRESETS",
-    "launch", "start", "default_binary", "HumanInput", "from_preset", "collect", "check", "print_report",
+    "launch", "start", "default_binary", "HumanInput", "from_preset",
+    "collect", "check", "check_exit_ip", "print_report",
     "js_params", "build_script", "install", "latest_release", "upgrade_kernel",
     "align_profile", "locale_for_country", "query_geo",
     "__version__",

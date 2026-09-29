@@ -14,8 +14,12 @@
 双引擎形态：**CDP 注入 JS bundle** 跑在任何 vanilla
 [ungoogled-chromium](https://github.com/ungoogled-chromium/ungoogled-chromium)
 内核上（内核升级只是下载一个新包），以及 **v0.7.0 起自编译的
-veil-chromium 内核**——ungoogled-chromium 153 + 19 个 C++ 指纹补丁
+veil-chromium 内核**——ungoogled-chromium 153 + C++ 指纹补丁
 （ninja/ThinLTO 全量构建，TLS 层经 ja3 E2E 证明与原版逐字节同策略）。
+
+**v0.8.0** 起内核更进一步：整套 JS 指纹 bundle **直接编译进可执行文件**
+（`engine="native"`）——裸启动浏览器即自带完整指纹，**零外部注入**
+（无 CDP、无扩展、没有可被察觉的 wrapper 引导过程）。
 
 设计参考 [Camoufox](https://github.com/daijro/camoufox)（统计真实感与
 跨信号一致性思路）与
@@ -63,6 +67,17 @@ veil-chromium 内核**——ungoogled-chromium 153 + 19 个 C++ 指纹补丁
   来自真实字形。
 - **TLS 指纹**：补丁内核 ClientHello 经归一化 ja3 对比与原版一致
   （GREASE 与扩展序随机性已归一）——补丁层不触碰网络栈。
+- **原生模式**（`engine="native"`，v0.8.0）：指纹 bundle 内嵌于内核二进制
+  （`kernel-patches/extra/veil`），在每个主世界与 worker 上下文的
+  document-start 原生执行——可执行文件本身即指纹浏览器。运行时仅经
+  `VEIL_PARAMS` 环境变量传入约 2.5 KB 的档位 JSON，度量兼容字体数据
+  编译进二进制。
+- **持久化档案**：`profile.save(path)` / `FingerprintProfile.load(path)`
+  （及 `veilbrowser profile-save`）——同一档案文件 + 同一 seed，数周后
+  复用仍是同一指纹（Camoufox #38/#442、CloakBrowser #320 同类需求）。
+- **代理出口 IP 自检**：配置代理启动后，浏览器走自身网络栈取公网 IP 并与
+  外部实测的代理出口比对——抓出认证 SOCKS5 静默回退直连这类故障
+  （CloakBrowser #157），结果在 `browser.proxy_check`。
 - **CDP 卫生**：会话从不调用 `Runtime.enable`（已公开的 DevTools 检测
   手法），console getter 探针测试锁定该行为。
 - **指纹自检**（`veilbrowser check`）与一条命令升级内核（sha256 校验）。
@@ -93,13 +108,14 @@ veil-chromium 内核**——ungoogled-chromium 153 + 19 个 C++ 指纹补丁
 └───────────────────────────────────────────────────────────┘
 ```
 
-### 双引擎
+### 引擎
 
 | engine | 指纹实现 | 内核要求 | 适用 |
 |--------|----------|----------|------|
 | `js`（默认） | inject.py bundle + CDP `Network.setUserAgentOverride` | 任何 vanilla Chromium | 跟随最新内核 |
 | `kernel` | veil-chromium C++ 补丁（`js_overlay=True` 叠加 canvas 层） | veil-chromium 153 | C++ 级噪声 |
-| `both` | 内核补丁 + JS 叠加 | veil-chromium 153 | **最大覆盖（推荐）** |
+| `both` | 内核补丁 + JS 叠加 | veil-chromium 153 | 共用内核时的最大覆盖 |
+| `native`（配 veil-chromium 推荐） | bundle **编译进二进制**原生执行，无任何注入 | veil-chromium ≥ v0.8.0 | **零注入隐身** |
 
 ## 平台支持
 
@@ -133,6 +149,19 @@ profile.proxy = "socks5://user:pass@proxy.example.com:1080"
 with launch(profile, headless=True) as browser:        # 默认 engine="js"
     with browser.new_page("https://example.com") as page:
         print(page.evaluate("navigator.userAgent"))
+
+# 原生模式：可执行文件即指纹浏览器——零注入。
+# 需要用 kernel-patches/extra/veil 编译的内核（scripts/build-kernel.sh）。
+with launch(profile, engine="native", headless=True) as browser:
+    print(browser.native_active)      # True：内嵌 bundle 已确认运行
+    print(browser.proxy_check)        # 经代理的出口 IP 自检
+```
+
+持久化——跨会话复用同一身份：
+
+```bash
+veilbrowser profile-save --preset windows-us-office --seed 42 myprofile.json
+veilbrowser check --profile-file myprofile.json
 ```
 
 配置了代理时自动把 WebRTC IP 策略预置为 `disable_non_proxied_udp`，
@@ -144,6 +173,7 @@ with launch(profile, headless=True) as browser:        # 默认 engine="js"
 veilbrowser check   --seed 1001 --platform macos --timezone Asia/Tokyo  # 自检报告
 veilbrowser check   --vanilla --engine js --quiet                       # JSON 输出
 veilbrowser launch  --preset windows-cn-office --seed 42                # 起浏览器
+veilbrowser profile-save --preset windows-us-office --seed 42 out.json  # 持久化档案
 veilbrowser profiles                                                    # 档位列表
 veilbrowser upgrade [--check] [--version X.Y.Z.W] [--dest DIR]          # 升级内核
 veilbrowser path                                                        # 双内核路径
@@ -185,10 +215,24 @@ headless：
 
 巡检原始证据文本在测试机的 `/tmp/sitecheck/`。
 
+### v0.8.0 原生模式：零注入，同等成绩
+
+同一旗舰档位（`windows-us-office`，seed 1001，headless），`engine="native"`
+——裸启动二进制、仅带 `VEIL_PARAMS` 环境变量，**CDP 不注入任何东西**：
+
+| 检测站 | 原生模式结果 |
+|---|---|
+| [bot.sannysoft.com](https://bot.sannysoft.com/) | **30/30 检查项全部通过，0 失败** |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **0 lie** · stealth **0%** · like-headless 6%——与 `engine="both"` 持平 |
+| [deviceandbrowserinfo.com](https://deviceandbrowserinfo.com/are_you_a_bot) | `"isBot": false` |
+| [BroTector](https://ttlns.github.io/brotector/) | **Average 0，零检出**（受信人化点击） |
+
+证据在测试机 `/tmp/nativecheck/`。
+
 ## 测试
 
 ```bash
-python -m pytest tests/ -q     # 133 项全绿（单元 + 内核集成）
+python -m pytest tests/ -q     # 142 项全绿（单元 + 内核集成）
 ```
 
 CI（GitHub Actions）只跑单元层；驱动真实 Chromium 内核的测试在找不到
@@ -218,14 +262,20 @@ bash scripts/build-kernel.sh dist/        # 约 100 GB 磁盘，8 核约 100 分
 
 或在自有 runner 上跑 `kernel (self-hosted)` GitHub Actions 工作流
 （托管 runner 磁盘不够）。脚本会下载 ungoogled-chromium、prune、套用
-上游 + 指纹补丁、域替换，产出 `veil-chromium-*.tar.zst` 内核包。
+上游 + 指纹补丁、域替换，产出 `veil-chromium-*.tar.zst` 内核包。补丁
+序列的最后一项 `extra/veil/native-inject.patch` 把 JS 指纹 bundle 编译进
+二进制（`engine="native"` 的本体）；改动 `veilbrowser/inject.py` 或
+`fontpack.py` 后用
+`.venv/bin/python scripts/gen_native_patch.py --tree <checkout>` 重新
+生成。
 
 ## 路线图（未完成工作）
 
 - **代理计时信号**：DNS/SSL 握手时序关联尚未清除。
 - **媒体查询布局一致性**：CSS 布局视口仍是宿主真实尺寸，要与档位屏幕
   彻底一致需要 C++ 级重排。
-- **纯 `engine="kernel"` 残余**：like-headless 38%（用 `both`）。
+- **Android 档位**（CloakBrowser #533 同类需求）：需要内核平台开关与
+  移动端 GPU/屏幕池配套，暂未实现。
 - **macOS / Windows 支持**（当前仅 Linux x86_64）。
 - **生态**：Playwright/Puppeteer drop-in API、多语言客户端 UI、
   Docker/远程 CDP 服务模式、档案管理 GUI。

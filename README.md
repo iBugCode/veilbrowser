@@ -18,9 +18,14 @@ design:
   [ungoogled-chromium](https://github.com/ungoogled-chromium/ungoogled-chromium)
   kernel (upgrading kernels is just downloading a new package), and
 - **C++ kernel** (since v0.7.0) — the self-compiled **veil-chromium** kernel:
-  ungoogled-chromium 153 + 19 C++ fingerprint patches, a full
+  ungoogled-chromium 153 + C++ fingerprint patches, a full
   ninja/ThinLTO official build whose TLS layer is byte-for-byte
   ja3-verified against the stock binary.
+
+Since **v0.8.0** the kernel goes one step further: the whole JS fingerprint
+bundle is *compiled into the binary* (`engine="native"`) — a stock launch of
+the executable carries the full fingerprint with **zero external
+injection** (no CDP, no extension, no wrapper bootstrap to catch).
 
 The design references [Camoufox](https://github.com/daijro/camoufox)
 (statistical realism and cross-signal coherence) and
@@ -79,6 +84,19 @@ components are used** — no proprietary code is included or derived (see
   the stock binary's (normalized ja3, GREASE and extension-order
   randomization accounted for) — the patch layer never touches the network
   stack.
+- **Native mode** (`engine="native"`, v0.8.0): the fingerprint bundle is
+  embedded in the kernel binary (`kernel-patches/extra/veil`) and runs at
+  document-start in every main-world and worker context — the executable
+  alone is a fingerprint browser. Only a ~2.5 KB profile JSON reaches it,
+  through the `VEIL_PARAMS` environment variable; the metric-clone font
+  payloads are compiled in.
+- **Saved profiles**: `profile.save(path)` / `FingerprintProfile.load(path)`
+  (and `veilbrowser profile-save`) — same file + same seed reproduces the
+  same fingerprint for session reuse weeks later.
+- **Proxy exit-IP self-check**: after launch with a proxy, the browser
+  fetches its public IP through its own network stack and compares it with
+  the externally measured proxy exit — catching the silent direct-connection
+  fallback users hit with authenticated SOCKS5 (`browser.proxy_check`).
 - **CDP hygiene**: sessions never call `Runtime.enable` (published
   DevTools-detection trick), verified by a console-getter probe test.
 - **Fingerprint self-check** (`veilbrowser check`) and one-command kernel
@@ -116,7 +134,8 @@ components are used** — no proprietary code is included or derived (see
 |--------|---------------------------|---------------|----------|
 | `js` (default) | inject.py bundle + CDP `Network.setUserAgentOverride` | any vanilla Chromium | track latest kernel |
 | `kernel` | veil-chromium C++ patches (`js_overlay=True` adds the canvas layer) | veil-chromium 153 | C++-level noise |
-| `both` | kernel patches + JS overlay | veil-chromium 153 | **maximum coverage (recommended)** |
+| `both` | kernel patches + JS overlay | veil-chromium 153 | maximum coverage on a shared kernel |
+| `native` (recommended with veil-chromium) | bundle **compiled into the binary**, runs natively; nothing injected | veil-chromium ≥ v0.8.0 | **zero-injection stealth** |
 
 ## Platform support
 
@@ -151,6 +170,19 @@ profile.proxy = "socks5://user:pass@proxy.example.com:1080"  # let GeoIP align i
 with launch(profile, headless=True) as browser:        # engine="js" default
     with browser.new_page("https://example.com") as page:
         print(page.evaluate("navigator.userAgent"))
+
+# Native mode: the executable IS the fingerprint browser — nothing injected.
+# Requires a kernel built from kernel-patches/extra/veil (scripts/build-kernel.sh).
+with launch(profile, engine="native", headless=True) as browser:
+    print(browser.native_active)      # True: compiled-in bundle confirmed
+    print(browser.proxy_check)        # exit-IP self-check through the proxy
+```
+
+Persistence — reuse an identity across sessions:
+
+```bash
+veilbrowser profile-save --preset windows-us-office --seed 42 myprofile.json
+veilbrowser check --profile-file myprofile.json
 ```
 
 With a proxy configured, the WebRTC IP policy is preset to
@@ -218,10 +250,25 @@ Honest caveats, measured on the same sweep:
 
 Raw page evidence from the sweep: `/tmp/sitecheck/` on the test machine.
 
+### v0.8.0 native mode: zero injection, same results
+
+Same flagship profile (`windows-us-office`, seed 1001, headless) with
+`engine="native"` — the binary is launched bare with only the `VEIL_PARAMS`
+environment variable; **nothing is injected via CDP**:
+
+| Detector | native result |
+|---|---|
+| [bot.sannysoft.com](https://bot.sannysoft.com/) | **30/30 checks passed, 0 failed** |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **0 lies** · stealth **0%** · like-headless 6% — parity with `engine="both"` |
+| [deviceandbrowserinfo.com](https://deviceandbrowserinfo.com/are_you_a_bot) | `"isBot": false` |
+| [BroTector](https://ttlns.github.io/brotector/) | **Average 0, zero detection rows** (trusted humanized click) |
+
+Evidence: `/tmp/nativecheck/` on the test machine.
+
 ## Tests
 
 ```bash
-python -m pytest tests/ -q     # 133 tests green (unit + kernel integration)
+python -m pytest tests/ -q     # 142 tests green (unit + kernel integration)
 ```
 
 CI (GitHub Actions) runs the unit layer; tests that drive a real Chromium
@@ -265,7 +312,8 @@ tarball.
   masked yet.
 - **Media-query layout consistency**: CSS layout viewport remains the real
   host size; making it match the profiled screen needs C++-level relayout.
-- **Pure `engine="kernel"` residuals**: like-headless 38% (use `both`).
+- **Android profiles** (CloakBrowser #533-style request): needs kernel
+  platform switches plus mobile GPU/screen pools.
 - **macOS / Windows support** (currently Linux x86_64 only).
 - **Ecosystem**: Playwright/Puppeteer drop-in API, multi-language client
   UI, Docker/remote-CDP service mode, profile-management GUI.

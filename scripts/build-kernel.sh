@@ -35,6 +35,10 @@ python3 ugc/utils/prune_binaries.py src "$PATCHES_DIR/pruning.list"
 python3 ugc/utils/apply_patches.py src ugc/patches
 python3 ugc/utils/domain_substitution.py apply -r "$PATCHES_DIR/domain_substitution.list" src
 python3 ugc/utils/apply_patches.py src "$PATCHES_DIR/extra"
+# The last patch in the walk (extra/veil/native-inject.patch) compiles the JS
+# fingerprint bundle INTO the binary — engine="native" needs no CDP injection.
+# It is generated from veilbrowser/inject.py + fontpack.py; regenerate after
+# touching those:  .venv/bin/python scripts/gen_native_patch.py --tree src
 
 # ---- 3. toolchain (depot_tools provides gn + bootstrap) -------------------
 git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git

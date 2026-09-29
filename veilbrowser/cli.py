@@ -10,9 +10,12 @@ from .profile import PRESETS, FingerprintProfile, from_preset
 
 
 def _add_engine_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--engine", choices=("js", "kernel", "both"), default="js",
+    p.add_argument("--engine", choices=("js", "kernel", "both", "native"),
+                   default="js",
                    help="js = our injected bundle on any kernel (default); "
-                        "kernel = fingerprint-chromium patches; both = stacked")
+                        "kernel = fingerprint-chromium patches; both = stacked; "
+                        "native = bundle compiled into the veil kernel "
+                        "(requires a kernel built from kernel-patches/extra/veil)")
     p.add_argument("--vanilla", action="store_true",
                    help="prefer the vanilla ungoogled-chromium binary (engine=js)")
 
@@ -21,6 +24,8 @@ def _add_profile_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--seed", type=int, default=None, help="fingerprint seed (32-bit int)")
     p.add_argument("--preset", choices=sorted(PRESETS), default=None,
                    help="coherent persona preset (seed still drives the rest)")
+    p.add_argument("--profile-file", dest="profile_file",
+                   help="load a saved profile JSON (seed still drives derived fields)")
     p.add_argument("--platform", choices=("windows", "macos", "linux"))
     p.add_argument("--timezone")
     p.add_argument("--language")
@@ -30,7 +35,9 @@ def _add_profile_args(p: argparse.ArgumentParser) -> None:
 
 
 def _profile_from_args(args: argparse.Namespace) -> FingerprintProfile:
-    if args.preset:
+    if getattr(args, "profile_file", None):
+        prof = FingerprintProfile.load(args.profile_file)
+    elif args.preset:
         if args.seed is None:
             sys.exit("--preset requires --seed")
         prof = from_preset(args.preset, args.seed)
@@ -93,6 +100,14 @@ def cmd_profiles(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_profile_save(args: argparse.Namespace) -> int:
+    prof = _profile_from_args(args).resolved()
+    prof.save(args.out)
+    print(f"profile saved: {args.out} (seed={prof.seed}, "
+          f"platform={prof.platform}, language={prof.language})")
+    return 0
+
+
 def cmd_upgrade(args: argparse.Namespace) -> int:
     from . import upgrade as up
     latest = up.latest_release()
@@ -138,6 +153,13 @@ def main(argv: list[str] | None = None) -> int:
     p_check.set_defaults(func=cmd_check)
 
     sub.add_parser("profiles", help="list persona presets").set_defaults(func=cmd_profiles)
+
+    p_save = sub.add_parser("profile-save",
+                            help="persist a profile to JSON for session reuse "
+                                 "(same file + same seed = same fingerprint)")
+    _add_profile_args(p_save)
+    p_save.add_argument("out", help="output JSON path")
+    p_save.set_defaults(func=cmd_profile_save)
 
     p_up = sub.add_parser("upgrade",
                           help="pull the newest community ungoogled-chromium kernel")

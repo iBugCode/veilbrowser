@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""Regenerate the native-injection kernel patch (kernel-patches/extra/veil/).
+
+The patch compiles the JS fingerprint bundle into the chrome binary itself:
+
+  * chrome/renderer/veil/veil_bundle.{h,cc} — the bundle template (from
+    veilbrowser.inject) plus the metric-clone font payloads (from
+    veilbrowser.fontpack), embedded as raw-string literals
+  * chrome/renderer/veil/veil_injector.{h,cc} — a RenderFrameObserver that
+    runs the bundle at document-start in every main-world context, plus a
+    worker-context entry point
+  * hooks in ChromeContentRendererClient (frame + worker) and BUILD.gn sources
+
+Run with --tree to also apply the same edits to a Chromium checkout so an
+incremental build picks them up immediately:
+
+    .venv/bin/python scripts/gen_native_patch.py --tree /home/Project/build/src
+
+Re-run after touching veilbrowser/inject.py or veilbrowser/fontpack.py; the
+patch is fully regenerated from the pristine copies under
+scripts/native-patch-src/pristine/, so it stays reproducible.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+NSRC = ROOT / "scripts" / "native-patch-src"
+SERIES = ROOT / "kernel-patches" / "series"
+PATCH = ROOT / "kernel-patches" / "extra" / "veil" / "native-inject.patch"
+BUNDLE_REL = "chrome/renderer/veil/veil_bundle.cc"
+
+PRELUDE = """\
+function veilNativeCfg(p) {
+  if (!p || typeof p !== 'object' || !p.spoof) return null;
+  var cfg = {};
+  for (var k in p) cfg[k] = p[k];
+  try { cfg.fontData = __veilFontData[p.platform] || {}; } catch (e) { cfg.fontData = {}; }
+  // dedicated/shared/service workers get the bundle natively via
+  // DidInitializeWorkerContextOnWorkerThread — no Worker-constructor wrap.
+  delete cfg.workerBundle;
+  return cfg;
+}
+"""
+
+NEW_FILES = {
+    "chrome/renderer/veil/veil_bundle.h": NSRC / "veil_bundle.h",
+    "chrome/renderer/veil/veil_injector.h": NSRC / "veil_injector.h",
+    "chrome/renderer/veil/veil_injector.cc": NSRC / "veil_injector.cc",
+}
+
+EDITS = {
+    "chrome/renderer/BUILD.gn": [(
+        '    "chrome_render_thread_observer.h",\n',
+        '    "chrome_render_thread_observer.h",\n'
+        '    "veil/veil_bundle.cc",\n'
+        '    "veil/veil_bundle.h",\n'
+        '    "veil/veil_injector.cc",\n'
+        '    "veil/veil_injector.h",\n',
+    )],
+    "chrome/renderer/chrome_content_renderer_client.h": [(
+        "  void RenderFrameCreated(content::RenderFrame* render_frame) override;\n",
+        "  void RenderFrameCreated(content::RenderFrame* render_frame) override;\n"
+        "  void DidInitializeWorkerContextOnWorkerThread(\n"
+        "      v8::Local<v8::Context> context) override;\n",
+    )],
+    "chrome/renderer/chrome_content_renderer_client.cc": [
+        (
+            '#include "chrome/renderer/chrome_content_renderer_client.h"\n',
+            '#include "chrome/renderer/chrome_content_renderer_client.h"\n'
+            '#include "chrome/renderer/veil/veil_injector.h"\n',
+        ),
+        (
+            "  ChromeRenderFrameObserver* render_frame_observer =\n"
+            "      new ChromeRenderFrameObserver(render_frame, web_cache_impl_.get());\n",
+            "  ChromeRenderFrameObserver* render_frame_observer =\n"
+            "      new ChromeRenderFrameObserver(render_frame, web_cache_impl_.get());\n"
+            "\n"
+            "  // veilbrowser: run the compiled-in fingerprint bundle at document-start\n"
+            "  new veil::VeilFrameInjector(render_frame);\n",
+        ),
+        (
+            "void ChromeContentRendererClient::RenderFrameCreated(\n"
+            "    content::RenderFrame* render_frame) {",
+            "void ChromeContentRendererClient::DidInitializeWorkerContextOnWorkerThread(\n"
+            "    v8::Local<v8::Context> context) {\n"
+            "  veil::RunVeilBundleInContext(context);\n"
+            "}\n"
+            "\n"
+            "void ChromeContentRendererClient::RenderFrameCreated(\n"
+            "    content::RenderFrame* render_frame) {",
+        ),
+    ],
+}
+
+
+def bundle_cc() -> str:
+    sys.path.insert(0, str(ROOT))
+    from veilbrowser.inject import _SCRIPT_TEMPLATE, _font_data_for
+
+    assert _SCRIPT_TEMPLATE.count("__VEIL_CFG__") == 1, "need exactly one cfg slot"
+    assert "__VEIL_PARAMS_JSON__" not in _SCRIPT_TEMPLATE
+    assert ")VEILSCR" not in _SCRIPT_TEMPLATE and ")VEILSCR" not in PRELUDE
+
+    fonts = {p: _font_data_for(p) for p in ("windows", "macos", "linux")}
+    fd_json = json.dumps(fonts, separators=(",", ":"), sort_keys=True)
+    assert ")VEILFD" not in fd_json
+
+    parts = [
+        "// Copyright 2026 veilbrowser contributors",
+        "// Use of this source code is governed by the MIT license found in the",
+        "// repository LICENSE (Chromium upstream remains BSD-style).",
+        "//",
+        "// GENERATED by scripts/gen_native_patch.py from veilbrowser/inject.py +",
+        "// veilbrowser/fontpack.py — regenerate, never hand-edit.",
+        "",
+        '#include "chrome/renderer/veil/veil_bundle.h"',
+        "",
+        "namespace veil {",
+        "",
+        "// cfg builder prelude + fingerprint bundle (single __VEIL_CFG__ slot; the",
+        "// __VEIL_PARAMS_JSON__ token is replaced once per renderer process with",
+        "// the small JSON from the VEIL_PARAMS environment variable).",
+        'const char kVeilScriptTemplate[] = R"VEILSCR(',
+        PRELUDE + _SCRIPT_TEMPLATE,
+        ')VEILSCR";',
+        "",
+        "// Metric-compatible clone fonts per platform as data:-URL woff2, so",
+        "// whitelisted families render with real Windows/macOS metrics on any host.",
+        "// NOTE: single line on purpose — wrapping would put raw newlines inside",
+        "// the base64 string literals (invalid JS string syntax).",
+        'const char kVeilFontData[] = R"VEILFD(',
+        fd_json,
+        ')VEILFD";',
+        "",
+        "}  // namespace veil",
+    ]
+    return "\n".join(parts) + "\n"
+
+
+def edited_contents(rel: str) -> str:
+    text = (NSRC / "pristine" / rel).read_text()
+    for old, new in EDITS[rel]:
+        assert text.count(old) == 1, f"anchor not unique in {rel}: {old[:60]!r}"
+        text = text.replace(old, new)
+    return text
+
+
+def file_contents(rel: str) -> str:
+    if rel == BUNDLE_REL:
+        return bundle_cc()
+    return NEW_FILES[rel].read_text()
+
+
+def render_patch() -> str:
+    with tempfile.TemporaryDirectory(prefix="veilpatch") as td:
+        work = pathlib.Path(td)
+        a, b = work / "a", work / "b"
+        for rel in EDITS:
+            for base in (a, b):
+                (base / rel).parent.mkdir(parents=True, exist_ok=True)
+            (a / rel).write_text((NSRC / "pristine" / rel).read_text())
+            (b / rel).write_text(edited_contents(rel))
+        for rel in list(NEW_FILES) + [BUNDLE_REL]:
+            (b / rel).parent.mkdir(parents=True, exist_ok=True)
+            (b / rel).write_text(file_contents(rel))
+        r = subprocess.run(["git", "diff", "--no-index", "a", "b"],
+                           cwd=work, capture_output=True, text=True)
+        text = r.stdout
+        if "diff --git" not in text:
+            raise RuntimeError(f"git produced no diff: {r.stderr.strip()}")
+        # headers come out as a/a/... b/b/... because both trees are subdirs
+        text = text.replace("a/a/", "a/").replace("b/b/", "b/")
+        return text
+
+
+def apply_edits(tree: pathlib.Path) -> None:
+    for rel in EDITS:
+        path = tree / rel
+        text = path.read_text()
+        for old, new in EDITS[rel]:
+            if new in text:
+                continue  # already applied
+            assert text.count(old) == 1, f"anchor not unique in {rel}: {old[:60]!r}"
+            text = text.replace(old, new)
+        path.write_text(text)
+    for rel in list(NEW_FILES) + [BUNDLE_REL]:
+        (tree / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tree / rel).write_text(file_contents(rel))
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--tree", help="chromium checkout to apply the edits to")
+    args = ap.parse_args()
+
+    PATCH.parent.mkdir(parents=True, exist_ok=True)
+    PATCH.write_text(render_patch())
+
+    series = SERIES.read_text() if SERIES.exists() else ""
+    line = "extra/veil/native-inject.patch\n"
+    if "extra/veil/native-inject.patch" not in series:
+        if series and not series.endswith("\n"):
+            series += "\n"
+        SERIES.write_text(series + line)
+
+    if args.tree:
+        apply_edits(pathlib.Path(args.tree))
+        print(f"applied edits to {args.tree}")
+    print(f"patch written: {PATCH} ({PATCH.stat().st_size} bytes)")
+
+
+if __name__ == "__main__":
+    main()

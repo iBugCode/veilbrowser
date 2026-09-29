@@ -8,6 +8,7 @@ _PROBE_JS = r"""
 (async () => {
   const r = {};
   const nav = navigator;
+  r.nativeEngine = typeof veilNativeCfg === 'function';
   r.userAgent = nav.userAgent;
   r.platform = nav.platform;
   r.webdriver = nav.webdriver;
@@ -80,6 +81,27 @@ def collect(page_cdp) -> dict:
     """Run the probe on an attached page CDP session, return the value dict."""
     raw = page_cdp.evaluate(_PROBE_JS, await_promise=True)
     return json.loads(raw)
+
+
+def check_exit_ip(page_cdp, expected_ip: str | None = None,
+                  timeout_s: float = 25.0) -> dict:
+    """Fetch the public exit IP through the browser's own network stack and
+    compare it with ``expected_ip`` (the proxy exit measured externally).
+
+    Catches the silent fallback users hit with authenticated SOCKS5
+    (CloakBrowser #157): when Chrome ignores the proxy the page-side IP is
+    the real host IP, not the proxy exit. ``match`` is None when no
+    expectation was supplied.
+    """
+    raw = page_cdp.evaluate(
+        "(async () => { const r = await fetch("
+        "'https://api.ipify.org?format=json', {cache: 'no-store'});"
+        " return (await r.json()).ip; })()",
+        await_promise=True,
+    )
+    ip = str(raw).strip()
+    return {"exit_ip": ip, "expected": expected_ip,
+            "match": (ip == expected_ip) if expected_ip else None}
 
 
 def open_probe_page(browser):

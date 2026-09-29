@@ -13,8 +13,9 @@ Coherence rules (the part fingerprint-chromium leaves to the caller):
 from __future__ import annotations
 
 import hashlib
+import json
 import random
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 
 PLATFORMS = ("windows", "macos", "linux")
 
@@ -99,6 +100,37 @@ class FingerprintProfile:
         lang = self.language or "en-US"
         base = lang.split("-")[0]
         return lang if base == lang else f"{lang},{base}"
+
+    # ---- persistence (CloakBrowser-style saved profiles) --------------------
+    # Same saved profile + same seed reproduce the same fingerprint on every
+    # engine, so sessions can be resumed weeks later with an identical identity.
+
+    def to_dict(self) -> dict:
+        """JSON-safe dict of every explicit field. Seed-derived fields are
+        re-derived on load, so a saved file never goes stale."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FingerprintProfile":
+        known = {f.name: f for f in fields(cls)}
+        kwargs = {}
+        for k, v in d.items():
+            if k not in known:
+                continue
+            f = known[k]
+            if isinstance(v, list) and isinstance(f.default, tuple):
+                v = tuple(v)  # JSON has no tuples (disable_spoofing)
+            kwargs[k] = v
+        return cls(**kwargs)
+
+    def save(self, path: str) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2, sort_keys=True)
+
+    @classmethod
+    def load(cls, path: str) -> "FingerprintProfile":
+        with open(path, encoding="utf-8") as f:
+            return cls.from_dict(json.load(f))
 
     def fingerprint_flags(self, kernel_fp: bool = True) -> list[str]:
         """Chrome flags realizing this profile (proxy excluded — launcher handles it).

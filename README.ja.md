@@ -19,8 +19,14 @@
   カーネル上で動作（カーネル更新はパッケージのダウンロードだけ）。
 - **C++ カーネル**（v0.7.0 以降） — 自己コンパイルした
   **veil-chromium** カーネル：ungoogled-chromium 153 + C++ 指紋パッチ
-  19 個（ninja/ThinLTO フルビルド。TLS レイヤーは ja3 E2E により
+  （ninja/ThinLTO フルビルド。TLS レイヤーは ja3 E2E により
   ストックバイナリと同一戦略であることを検証済み）。
+
+**v0.8.0** からはカーネルがさらに一歩進み、JS 指紋バンドル全体を
+**バイナリにコンパイル込み**にできるようになりました
+（`engine="native"`）——実行ファイルをそのまま起動するだけで完全な
+指紋が効き、**外部注入はゼロ**（CDP も拡張も、検知されうる wrapper の
+ブートストラップもありません）。
 
 設計は [Camoufox](https://github.com/daijro/camoufox)（統計的なリアリティ
 とシグナル間一貫性）と [CloakBrowser](https://github.com/CloakHQ/CloakBrowser)
@@ -74,6 +80,20 @@
 - **TLS 指紋**：パッチ済みカーネルの ClientHello は正規化 ja3 比較で
   ストックバイナリと一致することを証明（GREASE と拡張順序のランダム化を
   吸収）——パッチ層はネットワークスタックに触れません。
+- **ネイティブ モード**（`engine="native"`、v0.8.0）：指紋バンドルを
+  カーネル バイナリに埋め込み（`kernel-patches/extra/veil`）、すべての
+  メインワールドおよび worker コンテキストで document-start にネイティブ
+  実行——実行ファイル単体で指紋ブラウザになります。実行時に渡すのは
+  `VEIL_PARAMS` 環境変数経由の約 2.5 KB のプロファイル JSON のみで、
+  メトリック互換フォントのペイロードはバイナリに埋め込み済み。
+- **プロファイル永続化**：`profile.save(path)` /
+  `FingerprintProfile.load(path)`（および `veilbrowser profile-save`）
+  ——同一ファイル + 同一シードなら数週間後でも同一指紋を再現（Camoufox
+  #38/#442、CloakBrowser #320 と同種のニーズ）。
+- **プロキシ退出 IP セルフチェック**：プロキシ設定時に起動後、ブラウザ
+  自身のネットワーク スタック経由で公開 IP を取得し、外部実測のプロキシ
+  退出 IP と比較——認証付き SOCKS5 で起きる「サイレント直結フォール
+  バック」を検出（CloakBrowser #157）。結果は `browser.proxy_check`。
 - **CDP 衛生**：セッションは `Runtime.enable` を一切呼ばない（公開済みの
   DevTools 検出トリック）。console-getter プローブテストで動作を固定。
 - **指紋セルフチェック**（`veilbrowser check`）と sha256 検証付き
@@ -111,7 +131,8 @@
 |--------|-----------|----------------|------|
 | `js`（既定） | inject.py バンドル + CDP `Network.setUserAgentOverride` | 任意の vanilla Chromium | 最新カーネル追従 |
 | `kernel` | veil-chromium の C++ パッチ（`js_overlay=True` で canvas 層を追加） | veil-chromium 153 | C++ レベルのノイズ |
-| `both` | カーネルパッチ + JS オーバーレイ | veil-chromium 153 | **最大カバレッジ（推奨）** |
+| `both` | カーネルパッチ + JS オーバーレイ | veil-chromium 153 | 共用カーネルでの最大カバレッジ |
+| `native`（veil-chromium 推奨） | バンドルを**バイナリにコンパイル込み**でネイティブ実行。注入なし | veil-chromium ≥ v0.8.0 | **ゼロ注入ステルス** |
 
 ## プラットフォーム対応
 
@@ -147,6 +168,19 @@ profile.proxy = "socks5://user:pass@proxy.example.com:1080"
 with launch(profile, headless=True) as browser:        # 既定 engine="js"
     with browser.new_page("https://example.com") as page:
         print(page.evaluate("navigator.userAgent"))
+
+# ネイティブ モード：実行ファイル自体が指紋ブラウザ——注入ゼロ。
+# kernel-patches/extra/veil 由来のカーネルが必要（scripts/build-kernel.sh）。
+with launch(profile, engine="native", headless=True) as browser:
+    print(browser.native_active)      # True：埋め込みバンドルの動作を確認
+    print(browser.proxy_check)        # プロキシ経由の退出 IP セルフチェック
+```
+
+永続化——同一アイデンティティをセッション間で再利用：
+
+```bash
+veilbrowser profile-save --preset windows-us-office --seed 42 myprofile.json
+veilbrowser check --profile-file myprofile.json
 ```
 
 プロキシ設定時は WebRTC IP ポリシーが `disable_non_proxied_udp` に
@@ -158,6 +192,7 @@ with launch(profile, headless=True) as browser:        # 既定 engine="js"
 veilbrowser check   --seed 1001 --platform macos --timezone Asia/Tokyo  # セルフチェック
 veilbrowser check   --vanilla --engine js --quiet                       # JSON 出力
 veilbrowser launch  --preset windows-cn-office --seed 42                # ブラウザ起動
+veilbrowser profile-save --preset windows-us-office --seed 42 out.json  # プロファイル保存
 veilbrowser profiles                                                    # プリセット一覧
 veilbrowser upgrade [--check] [--version X.Y.Z.W] [--dest DIR]          # カーネル更新
 veilbrowser path                                                        # カーネル パス
@@ -202,10 +237,25 @@ veilbrowser path                                                        # カー
 
 巡回の生エビデンスはテスト機の `/tmp/sitecheck/` にあります。
 
+### v0.8.0 ネイティブ モード：注入ゼロで同等の結果
+
+同じフラッグシップ プロファイル（`windows-us-office`、seed 1001、
+headless）を `engine="native"` で実行——`VEIL_PARAMS` 環境変数だけを持たせ
+てバイナリを素起動し、**CDP では何も注入していません**：
+
+| 検出サイト | ネイティブ結果 |
+|---|---|
+| [bot.sannysoft.com](https://bot.sannysoft.com/) | **30/30 項目すべて合格、失敗 0** |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **lie 0** · stealth **0%** · like-headless 6%——`engine="both"` と同等 |
+| [deviceandbrowserinfo.com](https://deviceandbrowserinfo.com/are_you_a_bot) | `"isBot": false` |
+| [BroTector](https://ttlns.github.io/brotector/) | **Average 0、検出ゼロ**（trusted ヒューマナイズド クリック） |
+
+エビデンスはテスト機の `/tmp/nativecheck/`。
+
 ## テスト
 
 ```bash
-python -m pytest tests/ -q     # 133 テスト全緑（ユニット + カーネル統合）
+python -m pytest tests/ -q     # 142 テスト全緑（ユニット + カーネル統合）
 ```
 
 CI（GitHub Actions）はユニット層のみ実行。実際の Chromium カーネルを
@@ -240,6 +290,11 @@ bash scripts/build-kernel.sh dist/        # 約 100 GB ディスク、8 コア�
 実行（ホステッド ランナーはディスクが足りません）。スクリプトは
 ungoogled-chromium をダウンロードし、prune、上流 + 指紋パッチ適用、
 ドメイン置換を行い、`veil-chromium-*.tar.zst` カーネル tarball を生成します。
+パッチ列の最後 `extra/veil/native-inject.patch` が JS 指紋バンドルを
+バイナリにコンパイル込みます（`engine="native"` の本体）。
+`veilbrowser/inject.py` か `fontpack.py` を変更した場合は
+`.venv/bin/python scripts/gen_native_patch.py --tree <checkout>` で
+再生成してください。
 
 ## ロードマップ（未完了の作業）
 
@@ -248,7 +303,8 @@ ungoogled-chromium をダウンロードし、prune、上流 + 指紋パッチ�
 - **メディアクエリ レイアウト整合**：CSS レイアウト ビューポートは実ホスト
   サイズのまま。プロファイル画面と完全一致させるには C++ レベルの再
   レイアウトが必要。
-- **`engine="kernel"` 単体の残存**：like-headless 38%（`both` を使用）。
+- **Android プロファイル**（CloakBrowser #533 と同種の要望）：カーネルの
+  プラットフォーム スイッチとモバイル向け GPU/画面プールの組込みが必要。
 - **macOS / Windows 対応**（現状は Linux x86_64 のみ）。
 - **エコシステム**：Playwright/Puppeteer ドロップイン API、多言語クライアント
   UI、Docker/リモート CDP サービス モード、プロファイル管理 GUI。

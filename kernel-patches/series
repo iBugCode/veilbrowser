@@ -128,3 +128,4 @@ extra/fingerprint/014-client-rects.patch
 extra/fingerprint/015-canvas-measure-text.patch
 extra/fingerprint/016-webgl-readPixels.patch
 extra/fingerprint/018-timezone.patch
+extra/veil/native-inject.patch
