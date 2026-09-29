@@ -1,11 +1,14 @@
-# veilbrowser
-
-[English](README.md) | [中文](README.zh-CN.md) | [日本語](README.ja.md)
-
-[![CI](https://github.com/iBugCode/veilbrowser/actions/workflows/ci.yml/badge.svg)](https://github.com/iBugCode/veilbrowser/actions/workflows/ci.yml)
-![Platform](https://img.shields.io/badge/platform-linux%20x86__64-blue)
-![Python](https://img.shields.io/badge/python-3.10%2B-informational)
-![License](https://img.shields.io/badge/license-MIT-green)
+<div align="center">
+  <img src="assets/logo.svg" width="140" alt="veilbrowser logo"/>
+  <h1>veilbrowser</h1>
+  <p><a href="README.md">English</a> | <a href="README.zh-CN.md">中文</a> | <a href="README.ja.md">日本語</a></p>
+  <p>
+    <a href="https://github.com/iBugCode/veilbrowser/actions/workflows/ci.yml"><img src="https://github.com/iBugCode/veilbrowser/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+    <img src="https://img.shields.io/badge/platform-linux%20x86__64-blue" alt="Platform"/>
+    <img src="https://img.shields.io/badge/python-3.10%2B-informational" alt="Python"/>
+    <img src="https://img.shields.io/badge/license-MIT-green" alt="License"/>
+  </p>
+</div>
 
 An open-source fingerprint (anti-detect) browser SDK for automation, aiming
 to be **the best open-source fingerprint browser**. It ships a dual-engine
