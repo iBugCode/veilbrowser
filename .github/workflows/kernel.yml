@@ -1,0 +1,30 @@
+# Self-hosted only: applying the fingerprint patch set requires a full
+# Chromium checkout (~100 GB disk, ~100 min on 8 cores). GitHub-hosted
+# runners have ~14 GB of disk and cannot build the kernel; run this
+# workflow on your own machine instead:
+#
+#   git clone https://github.com/VEIL_OWNER/veilbrowser && cd veilbrowser
+#   # register the runner, then dispatch this workflow — or simply run:
+#   bash scripts/build-kernel.sh dist/
+#
+# The produced binary is NOT committed back — this repo ships patches only.
+
+name: kernel (self-hosted)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-kernel:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build patched veil-chromium
+        run: bash scripts/build-kernel.sh dist/
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: veil-chromium-${{ github.sha }}
+          path: dist/veil-chromium-*.tar.zst
+          if-no-files-found: error

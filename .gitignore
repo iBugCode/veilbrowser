@@ -4,3 +4,6 @@ veilbrowser.egg-info/
 __pycache__/
 *.pyc
 kernels/
+dist/
+build/
+*.egg-info/

@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[cdp,dev]"
+      - name: Unit tests
+        # Tests that drive a real Chromium kernel skip automatically when
+        # VEIL_CHROME_PATH / VEIL_VANILLA_CHROME_PATH are absent, so hosted
+        # runners exercise the full unit layer.
+        run: python -m pytest tests/ -q
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: veilbrowser-dist
+          path: dist/
+      - name: CLI smoke test (installable executable)
+        run: |
+          pip install dist/*.whl
+          veilbrowser --help
+          veilbrowser profiles
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: veilbrowser-dist
+          path: dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

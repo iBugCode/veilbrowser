@@ -1,233 +1,288 @@
 # veilbrowser
 
-面向自动化的开源指纹浏览器 SDK,目标是成为**最好的开源指纹浏览器**。
-双引擎形态:**CDP 注入 JS bundle** 跑在任何 vanilla ungoogled-chromium 内核上
-(内核升级只是下载一个新包),以及 **v0.7.0 起自编译的 veil-chromium 内核**
-——ungoogled-chromium 153 + 19 个 C++ 指纹补丁(ninja/ThinLTO 全量构建,
-TLS 层经 ja3 E2E 证明与原版逐字节同策略)。参考
-[Camoufox](https://github.com/daijro/camoufox) 的一致性思路与
-[CloakBrowser](https://github.com/CloakHQ/CloakBrowser) 的产品形态。
+[English](README.md) | [中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-核心能力:种子 → **自洽**指纹档位(语言↔时区↔平台↔GPU↔屏幕互相一致,
-GPU 串按平台取真实 ANGLE 格式)、代理密码认证(SOCKS5/HTTP 本地转发)、
-**代理出口 GeoIP 自动对齐**(时区/语言未显式指定时从出口 IP 推导)、
-**HTTP 头与 navigator 强一致**(Sec-CH-UA / User-Agent / Accept-Language)、
-音频采样率/延迟、speech voices、Battery、指纹自检、一条命令升级内核。
+[![CI](https://github.com/VEIL_OWNER/veilbrowser/actions/workflows/ci.yml/badge.svg)](https://github.com/VEIL_OWNER/veilbrowser/actions/workflows/ci.yml)
+![Platform](https://img.shields.io/badge/platform-linux%20x86__64-blue)
+![Python](https://img.shields.io/badge/python-3.10%2B-informational)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-## 架构
+An open-source fingerprint (anti-detect) browser SDK for automation, aiming
+to be **the best open-source fingerprint browser**. It ships a dual-engine
+design:
+
+- **JS engine** — a CDP-injected JS bundle that runs on any vanilla
+  [ungoogled-chromium](https://github.com/ungoogled-chromium/ungoogled-chromium)
+  kernel (upgrading kernels is just downloading a new package), and
+- **C++ kernel** (since v0.7.0) — the self-compiled **veil-chromium** kernel:
+  ungoogled-chromium 153 + 19 C++ fingerprint patches, a full
+  ninja/ThinLTO official build whose TLS layer is byte-for-byte
+  ja3-verified against the stock binary.
+
+The design references [Camoufox](https://github.com/daijro/camoufox)
+(statistical realism and cross-signal coherence) and
+[CloakBrowser](https://github.com/CloakHQ/CloakBrowser) (product shape and
+feature set, used as the closed-source benchmark). The kernel patch set
+builds on the fingerprint-chromium patch ideas. **Only open-source
+components are used** — no proprietary code is included or derived (see
+[License](#license)).
+
+> ⚠️ **Disclaimer**: browser-fingerprint evasion is a cat-and-mouse field.
+> Use veilbrowser only where you have the legal right to do so; automated
+> access may violate the terms of service of individual sites. You are
+> responsible for how you use it.
+
+## Features
+
+- **Seed → coherent fingerprint profile**: language ↔ timezone ↔ platform ↔
+  GPU ↔ screen all agree (GPU strings use real per-platform ANGLE formats;
+  macOS never gets 1366x768). Same seed, same fingerprint — reproducible;
+  different seeds differ everywhere — no bot-cluster resemblance.
+- **HTTP-layer consistency**: `User-Agent` / `Sec-CH-UA*` /
+  `Accept-Language` are forced to match the in-page navigator exactly.
+- **JS engine coverage**: navigator (UA/platform/UA-CH/brands/webdriver/
+  deviceMemory/hardwareConcurrency/languages/plugins), full timezone
+  (`Date` semantics + `Intl`), canvas noise (including pure-text canvases),
+  client-rects jitter, audio noise, WebGL vendor/renderer + extension list
+  (intersected with real Chrome) + shader precision, screen metrics,
+  mediaDevices enumeration, AudioContext sample rate/latency, per-platform
+  speech voices, fully synthesized Battery API, storage quotas (desktop
+  scale, worker scopes too), Geolocation (proxy exit coords + jitter),
+  WebRTC ICE exit-IP rewriting.
+- **Proxy support**: SOCKS5/HTTP with password auth via a local forwarder,
+  upstream-side DNS, and automatic WebRTC IP-policy presetting so the real
+  IP never leaks past the proxy.
+- **GeoIP alignment**: timezone/language/geolocation/WeBRTC IP derived from
+  the proxy exit IP when not set explicitly (queried through the same
+  proxy chain).
+- **Fingerprint/live-window separation** (CloakBrowser-style):
+  `screen` reports the profile, window metrics stay real, and
+  `screen.__width/__height` expose the true host window — implemented at
+  C++ IDL level in the patched kernel.
+- **headless=new artifact masking**: Notification/permissions, hasFocus,
+  Web Share, ContentIndex/ContactsManager/downlinkMax, CSS system colors,
+  prefers-color-scheme — masked in C++ on the patched kernel and in JS
+  elsewhere.
+- **Lie-proof wrappers**: non-constructible native-shaped methods, getter
+  brand checks, prototype-only accessors, cross-realm toString registry —
+  0 hits on CreepJS lie detection.
+- **Humanized input** (`humanize`): Bézier mouse paths with overshoot,
+  typing cadence with thinking pauses, inertial scrolling — events land
+  with `isTrusted: true` via CDP input domain.
+- **Metric-compatible font pack** (`fontpack`): embedded woff2
+  (Liberation/Carlito/Caladea/Gelasio) registered on demand and hidden from
+  `FontFaceSet` enumeration; whitelisted font widths come from real glyphs.
+- **TLS fingerprint**: the patched kernel's ClientHello is proven equal to
+  the stock binary's (normalized ja3, GREASE and extension-order
+  randomization accounted for) — the patch layer never touches the network
+  stack.
+- **CDP hygiene**: sessions never call `Runtime.enable` (published
+  DevTools-detection trick), verified by a console-getter probe test.
+- **Fingerprint self-check** (`veilbrowser check`) and one-command kernel
+  upgrade with sha256 verification.
+
+## Architecture
 
 ```
-┌───────────────────────────────────────────────────────┐
-│ veilbrowser Python SDK (MIT)                          │
-│  profile.py  种子 → 连贯指纹档位(平台/语言/时区/CPU/GPU/屏幕)│
-│  inject.py   ★指纹引擎:JS bundle + CDP UA 覆写         │
-│  browser.py  启动器(DevTools/清理/WebRTC 预置)         │
-│  proxy.py    本地认证转发器(SOCKS5/HTTP,上游侧 DNS)    │
-│  geo.py      代理出口 GeoIP 对齐(时区/语言推导)         │
-│  cdp.py      最小 CDP 客户端                           │
-│  probe.py    指纹自检(12 项)                        │
-│  upgrade.py  一条命令升级内核(sha256 校验)             │
-│  humanize.py 人类化输入(贝塞尔鼠标/键入节奏/滚动)      │
-│  fontpack.py 度量兼容字体包(woff2 内嵌)                │
-│  tls.py      ClientHello 捕获 + ja3 归一化对比          │
-│  kernel-patches/ veil-chromium 153 C++ 指纹补丁集(19 个)│
-├───────────────────────────────────────────────────────┤
-│ 内核(可插拔)                                          │
-│  · vanilla ungoogled-chromium 153(默认,--vanilla)     │
-│  · veil-chromium 153(本项目自编译,engine="kernel"/    │
-│    "both";C++ 级 screen.__width/__height、headless 环  │
-│    境遮蔽、系统色、种子化 canvas/audio/clientRects/字体)│
-└───────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│ veilbrowser Python SDK (MIT)                              │
+│  profile.py   seed → coherent fingerprint profile         │
+│  inject.py    ★ fingerprint engine: JS bundle + UA override│
+│  browser.py   launcher (DevTools / cleanup / WebRTC prefs)│
+│  proxy.py     local auth forwarder (SOCKS5/HTTP)          │
+│  geo.py       proxy-exit GeoIP alignment                  │
+│  cdp.py       minimal CDP client                          │
+│  probe.py     fingerprint self-check (12 items)           │
+│  upgrade.py   one-command kernel upgrade (sha256)         │
+│  humanize.py  human-like input (mouse/keys/scroll)        │
+│  fontpack.py  metric-compatible font pack (woff2)         │
+│  tls.py       ClientHello capture + normalized ja3 diff   │
+│  kernel-patches/  19 C++ fingerprint patches for 153      │
+├───────────────────────────────────────────────────────────┤
+│ Kernel (pluggable)                                        │
+│  · vanilla ungoogled-chromium 153 (default, --vanilla)    │
+│  · veil-chromium 153 (self-compiled; C++ screen.__width/  │
+│    __height, headless masking, system colors, seeded      │
+│    canvas/audio/clientRects/fonts)                        │
+└───────────────────────────────────────────────────────────┘
 ```
 
-### 双引擎
+### Engines
 
-| engine | 指纹实现 | 内核要求 | 适用 |
-|--------|----------|----------|------|
-| `js`(默认) | inject.py 注入 bundle + CDP `Network.setUserAgentOverride` | 任何 vanilla Chromium | 跟随最新内核 |
-| `kernel` | veil-chromium 自编译内核的 C++ 补丁(`js_overlay=True` 可叠加 canvas 段) | veil-chromium 153 | 需要 C++ 级噪声 |
-| `both` | 内核补丁 + JS 叠加 | fingerprint-chromium | 最大覆盖 |
+| engine | fingerprint implementation | kernel needed | use case |
+|--------|---------------------------|---------------|----------|
+| `js` (default) | inject.py bundle + CDP `Network.setUserAgentOverride` | any vanilla Chromium | track latest kernel |
+| `kernel` | veil-chromium C++ patches (`js_overlay=True` adds the canvas layer) | veil-chromium 153 | C++-level noise |
+| `both` | kernel patches + JS overlay | veil-chromium 153 | **maximum coverage (recommended)** |
 
-JS 引擎覆盖:navigator(UA/platform/UA-CH/brands/webdriver/deviceMemory/
-hardwareConcurrency/languages/plugins)、时区全套(`Date` 构造器/本地 getter/
-`toString`/`Intl.DateTimeFormat`)、canvas(getImageData/toDataURL/toBlob/
-measureText 加噪,**纯文本 canvas 也加噪**——内核补丁的已知缺口)、client
-rects 微扰、audio 渲染加扰、WebGL vendor/renderer、屏幕指标一致性、
-mediaDevices 枚举、AudioContext 采样率/延迟/最大声道数(显式构造参数保持)、
-speechSynthesis 按平台+语言的声音池、Battery API 完整合成(ungoogled
-内核移除了它——对自称 Chrome 的指纹,"API 缺失"本身就是特征)、
-**WebGL 扩展列表**(与 Chrome 官方集取交集,getExtension 始终可解析)与
-**shader 精度**(ANGLE D3D11 基准)、**存储配额**(desktop 量级,含 worker
-作用域——小配额会被判为隐身模式)、**Geolocation**(代理出口坐标+种子抖动)、
-**WebRTC ICE 出口 IP**(candidate/SDP 中 IPv4 改写为代理出口 IP);HTTP 层由
-CDP 覆写保证 `User-Agent`/`Sec-CH-UA*`/`Accept-Language` 与页面内完全一致。
+## Platform support
 
-## 快速开始
+**Linux x86_64 only** for now (the kernels and the build pipeline are
+Linux-first). macOS and Windows kernels/packaging are on the roadmap —
+see [Roadmap](#roadmap-unfinished-work).
+
+## Quick start
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[cdp,dev]"
 
-veilbrowser upgrade --check          # 看社区最新内核(目前 153.0.8010.52)
-veilbrowser upgrade                  # 下载+sha256 校验+解压+写配置
+veilbrowser upgrade --check          # latest community kernel (153.0.8010.52)
+veilbrowser upgrade                  # download + sha256 + unpack + configure
 veilbrowser check --vanilla --seed 1001 --preset windows-us-office
 ```
 
-内核二进制的发现顺序:环境变量(`VEIL_VANILLA_CHROME_PATH`/`VEIL_CHROME_PATH`)
-→ 配置文件 `/etc/veilbrowser.conf` 或 `~/.veilbrowser.conf` 的
-`vanilla_binary =` / `binary =` 行 → 常见目录 glob。
+Kernel binary discovery order: env (`VEIL_VANILLA_CHROME_PATH` /
+`VEIL_CHROME_PATH`) → `/etc/veilbrowser.conf` or `~/.veilbrowser.conf`
+(`vanilla_binary =` / `binary =`) → common-directory globs.
 
 ### Python API
 
 ```python
-from veilbrowser import launch, from_preset
+from veilbrowser import from_preset, launch
 
-profile = from_preset("windows-us-office", seed=1001)
-profile.proxy = "socks5://user:pass@proxy.example.com:1080"  # 带认证代理走本地转发
+profile = from_preset("windows-us-office", seed=42)
+profile.timezone = "Asia/Tokyo"                        # or leave unset and
+profile.proxy = "socks5://user:pass@proxy.example.com:1080"  # let GeoIP align it
 
-with launch(profile, headless=True) as browser:          # 默认 engine="js"
+with launch(profile, headless=True) as browser:        # engine="js" default
     with browser.new_page("https://example.com") as page:
         print(page.evaluate("navigator.userAgent"))
 ```
 
-配置了代理时自动把 WebRTC IP 策略预置为 `disable_non_proxied_udp`,
-真实 IP 不会绕过代理泄露。
+With a proxy configured, the WebRTC IP policy is preset to
+`disable_non_proxied_udp` — the real IP cannot bypass the proxy.
 
 ### CLI
 
 ```bash
-veilbrowser check   --seed 1001 --platform macos --timezone Asia/Tokyo  # 自检报告
-veilbrowser check   --vanilla --engine js --quiet                       # JSON 输出
-veilbrowser launch  --preset windows-cn-office --seed 42                # 起浏览器
-veilbrowser profiles                                                    # 档位列表
-veilbrowser upgrade [--check] [--version X.Y.Z.W] [--dest DIR]          # 升级内核
-veilbrowser path                                                        # 双内核路径
+veilbrowser check   --seed 1001 --platform macos --timezone Asia/Tokyo  # self-check report
+veilbrowser check   --vanilla --engine js --quiet                       # JSON output
+veilbrowser launch  --preset windows-cn-office --seed 42                # start a browser
+veilbrowser profiles                                                    # list presets
+veilbrowser upgrade [--check] [--version X.Y.Z.W] [--dest DIR]          # kernel upgrade
+veilbrowser path                                                        # kernel paths
 ```
 
-## 指纹档位(连贯性是卖点)
+## Fingerprint profiles: coherence is the selling point
 
-裸种子只保证"随机",veilbrowser 保证"自洽":语言池与时区池地理一致
-(`ja-JP` → `Asia/Tokyo`,绝不会出现日语配纽约)、CPU 核心数取真实分布、
-屏幕分辨率按平台取真实组合(macOS 不会配 1366x768)、GPU 串按平台分配、
-UA↔platform↔UA-CH↔HTTP 头四面一致。种子是 32 位整数,同一 seed 永远
-得到同一份指纹(可复现),不同 seed 之间 canvas/audio/GPU/屏幕均不同
-——避免"多实例指纹雷同"被判定为机器人集群。
+Raw seeds only guarantee "random". veilbrowser guarantees "self-consistent":
+language and timezone pools are geographically aligned (`ja-JP` never pairs
+with New York), CPU core counts follow real-world distributions, screen
+resolutions are real per-platform combos, GPU strings are assigned per
+platform, and UA ↔ platform ↔ UA-CH ↔ HTTP headers all agree. Seeds are
+32-bit integers — the same seed always reproduces the same fingerprint,
+different seeds differ in canvas/audio/GPU/screen — avoiding the
+"multi-instance fingerprint resemblance" that flags bot clusters.
 
-## 测试
+## Public bot-detection results (v0.7.0 sweep, flagship `engine="both"`)
+
+Self-compiled veil-chromium 153 kernel + JS overlay, `windows-us-office`,
+seed 1001, headless:
+
+| Detector | Result |
+|---|---|
+| [bot.sannysoft.com](https://bot.sannysoft.com/) | **30/30 checks passed, 0 failed** |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **0 lies** · headless **0%** · stealth **0%** · like-headless 6% (dark-mode seeds: 0%) |
+| [BrowserScan](https://www.browserscan.net/bot-detection) | "**No bots detected** — the visitor could be a human using a regular browser." |
+| [Anti-CAPTCHA score detector](https://antcpt.com/score_detector/) (reCAPTCHA v3) | score **0.9 / 1.0** (≥ 0.7 = fast-captcha tier) |
+| [deviceandbrowserinfo.com](https://deviceandbrowserinfo.com/are_you_a_bot) | `"isBot": false`, `"hasBotUserAgent": false` |
+| Fingerprint Pro live ([fingerprint.com/github](https://fingerprint.com/github/), [playground](https://demo.fingerprint.com/playground)) | Identified, confidence **0.98**; **Bot / Incognito / DevTools: Not detected** |
+| [BroTector](https://ttlns.github.io/brotector/) | **Average 0, zero detection rows** — trusted CDP clicks don't even trip `Input.untrusted` |
+| [PixelScan](https://pixelscan.net/bot-check) bot-check | "**You're Definitely a Human**"; Navigator(73)/Webdriver(37)/CDP(2)/UA groups all **Clear** |
+| [iphey.com](https://iphey.com/) | HARDWARE / SOFTWARE / LOCATION all "**Everything is fine**" after GeoIP alignment |
+
+Honest caveats, measured on the same sweep:
+
+- Canvas noise is flagged by CreepJS as "rgba noise" and by Fingerprint Pro
+  as a Browser-Tampering signal — the inherent cost of noise-based
+  spoofing (fingerprint-chromium has the same trade), exchanged for
+  cross-instance unlinkability.
+- Datacenter exit IPs draw VPN/VM/"ISP risk" flags from Fingerprint Pro
+  and iphey regardless of the browser (iphey: Risk 42/medium,
+  `Datacenter: true`). Residential proxies are required for
+  IP-reputation-sensitive detectors.
+- Without a proxy, an exit-IP/timezone mismatch is honestly reported by
+  Fingerprint Pro ("VPN: timezone mismatch") and iphey — that is exactly
+  what `veilbrowser.geo.align_profile` fixes; production setups should
+  configure a proxy and let GeoIP align the profile.
+- Pure `engine="kernel"` (no JS overlay) leaves like-headless at 38% —
+  the JS engine's environment masking (Web Share/ContentIndex/downlinkMax)
+  doesn't participate; use `engine="both"`.
+- PixelScan's /fingerprint-check widget never left its "scanning…" state
+  from our datacenter network (4 attempts) — environment-unreachable, not
+  a detection verdict.
+
+Raw page evidence from the sweep: `/tmp/sitecheck/` on the test machine.
+
+## Tests
 
 ```bash
-VEIL_CHROME_PATH=<veil-chromium> python -m pytest tests/ -q   # 132 项全绿
+python -m pytest tests/ -q     # 133 tests green (unit + kernel integration)
 ```
 
-覆盖:两套内核上的身份一致性、UA-CH、canvas 种子噪声与确定性、audio 种子
-依赖、clientrects 抖动、webgl 字符串、时区(含 `Date` 本地语义)、插件形状、
-getter 原生伪装(toString 检测)、iframe 注入覆盖、**HTTP 头与 navigator
-一致性**(真实靶站捕获 Sec-CH-UA*)、屏幕指标、WebRTC 预置、代理全链认证、
-**worker 作用域伪装**(DedicatedWorker UA/时区/webdriver/GPU)、
-**GeoIP 对齐**(假代理链 E2E:出口 IP → Asia/Tokyo/ja-JP)、
-**Geolocation/WebRTC 出口 IP**(假 geo 链端到端)、**WebGL 扩展/精度**、
-**worker 作用域存储配额**、**kernel+js_overlay**(纯文本 canvas 加噪且内核身份不变)、
-**内核 C++ 层验证**(`screen.__width/__height` IDL、headless 遮蔽、ActiveText)、
-**TLS ja3 对齐 E2E**(自编译内核 vs vanilla 内核 ClientHello 逐项归一化相等,
-GREASE/扩展序随机性已归一)、**人类化输入 isTrusted E2E**(贝塞尔鼠标/键入/滚动
-全部以 trusted 事件落点)、**console getter 静默**(无 Runtime.enable 序列化)。
+CI (GitHub Actions) runs the unit layer; tests that drive a real Chromium
+kernel skip automatically when kernel binaries are absent. Locally, point
+the suite at your kernels:
 
-## 公开检测工具实测(v0.7.0 主流站全量巡检)
+```bash
+VEIL_CHROME_PATH=/path/to/veil-chromium/chrome python -m pytest tests/ -q
+```
 
-旗舰配置(自编译 veil-chromium 153 内核 + JS 双引擎,windows-us-office
-seed=1001,headless),证据文本存 `/tmp/sitecheck/`:
+Coverage includes: identity coherence on both kernels, UA-CH, canvas seed
+noise + determinism, audio seed dependency, clientRects jitter, WebGL
+strings/extensions/precision, timezone (`Date` semantics), plugin shape,
+getter native-masking (toString probes), iframe injection coverage,
+HTTP-header↔navigator consistency (captured on live targets), screen
+metrics, WebRTC presets, full proxy-chain auth, worker-scope spoofing,
+GeoIP alignment E2E, Geolocation/WebRTC exit-IP, storage quotas,
+kernel+js_overlay, kernel C++ verification (`screen.__width/__height` IDL,
+headless masking, ActiveText), TLS ja3 E2E, humanized-input isTrusted E2E,
+console-getter silence, and a wrapper/apply-hook regression from the
+BroTector finding.
 
-- **bot.sannysoft.com:30/30 检查项全部通过、0 失败**(含 WebDriver New、
-  Headless、MQ_SCREEN 媒体查询组)。
-- **CreepJS:0 lie、headless 0%、stealth 0%、like headless 6%**
-  (残余 6% 为 light 配色档位的 prefers-color-scheme 项,dark 档位种子为
-  0%);0 控制台错误、0 异常;DedicatedWorker 与 ServiceWorker 作用域的
-  UA/UA-CH/平台/时区/GPU 全部与页面自洽(置信度 high);字体面不再暴露
-  宿主 Linux 字体集。
-- **BrowserScan /bot-detection**:"No bots detected — the visitor could
-  be a human using a regular browser."
-- **Anti-CAPTCHA reCAPTCHA v3 评分**(antcpt.com/score_detector):
-  **0.9 / 1.0**(≥0.7 即快速验证码档,Google 判定人类交互)。
-- **deviceandbrowserinfo.com /are_you_a_bot**:`"isBot": false`、
-  `"hasBotUserAgent": false`。
-- **Fingerprint Pro 实时识别**(fingerprint.com/github 与
-  demo.fingerprint.com/playground):识别成功、Confidence 0.98,
-  **Bot / Incognito Mode / Developer Tools 全部 Not detected**。诚实记录:
-  其 Browser Tampering 信号为 Yes(canvas 噪声类方案的固有代价),
-  VPN/VM 信号来自机房 IP 本身(下条)。
-- **BroTector**(ttlns.github.io/brotector):检测表 **Average 0、零检出
-  行**;humanize 走 CDP 受信点击,连 `Input.untrusted` 都不触发。巡检中
-  发现并修复:注入包装器内部原经 `Function.prototype.apply` 调用,会喂进
-  其 apply Proxy 陷阱并与 toString 伪装互递归(RangeError);现改用
-  document_start 捕获的原始 apply + toString 重入守卫,并有回归测试
-  (`test_wrappers_bypass_apply_hooks`)。
-- **PixelScan /bot-check**:"You're Definitely a Human",分项
-  Navigator(73)/Webdriver(37)/CDP(2)/UA(5)/Plugins/Languages 全部
-  **Clear**。/fingerprint-check 页面在本机房网络下始终停在 scanning
-  (四次尝试),环境不可达,非检测判定。
-- **iphey.com**:出口 IP 为机房段时,未对齐档位会被判 "Unreliable"
-  (location 失配);经 GeoIP 对齐(新加坡出口 → Asia/Singapore)后
-  **HARDWARE / SOFTWARE / LOCATION 全部 "Everything is fine"**,残余为
-  其 3 条 browser 内部启发式与机房 IP 的 Risk 42/medium
-  (Datacenter: true——环境因素,需住宅代理)。
+## Building the kernel
 
-无代理直跑时,出口 IP 与档位时区的不一致会被 Fingerprint Pro
-(VPN: timezone mismatch)与 iphey(location 不一致)如实检出——这正是
-`veilbrowser.geo.align_profile` 存在的意义;生产部署应配置代理并让
-GeoIP 对齐档位。Canvas 噪声会被 CreepJS 标注 "rgba noise" —— 这是
-噪声类伪装的固有代价(fingerprint-chromium 同理),换来的是跨实例
-不可关联。
+This repository ships **patches only** — no Chromium sources or binaries
+are committed. To build the patched kernel yourself:
 
-## 对标与路线图
+```bash
+bash scripts/build-kernel.sh dist/        # ~100 GB disk, ~100 min on 8 cores
+```
 
-已吸收 Camoufox/CloakBrowser 的:统计真实感档位池、每实例种子化差异、
-HTTP 头一致性、WebRTC IP 策略、mediaDevices 枚举、geo 一致性、
-**worker/SW 作用域注入**(浏览器级 auto-attach + Worker 构造器包装)、
-**字体白名单+度量包**(measureText 族替换 + fonts.check + FontFace local() 拦截;
-v0.7.0 起内嵌度量兼容 woff2——白名单字体的宽度来自真实字形)、
-**代理出口 GeoIP 自动对齐**(经同一条代理链查询,显式指定优先,失败兜底)、
-**每平台 GPU 串**(Windows D3D11 / macOS Metal / Linux Mesa,与平台联动)、
-**音频采样率/延迟 + speech voices + Battery**、
-**指纹/实况窗口分离**(screen 走档位,窗口指标真实,`screen.__width/
-__height` 暴露真实宿主窗口——CloakBrowser 特性)、
-**headless=new 环境痕迹全闭**(Notification/permissions、hasFocus、
-Web Share、ContentIndex/ContactsManager/downlinkMax、系统色、
-prefers-color-scheme)、
-**lie-proof wrapper 形态**(不可构造方法 wrapper + getter 品牌校验 +
-prototype-only 访问器 + 跨 realm toString 注册表,creepjs lie 检测 0 命中)。
-**v0.7.0 新完成(原诚实清单销账)**:
+Or run the `kernel (self-hosted)` GitHub Actions workflow on your own
+runner (hosted runners don't have the disk). The script downloads
+ungoogled-chromium, prunes it, applies upstream + fingerprint patches,
+substitutes domains, and produces a `veil-chromium-*.tar.zst` kernel
+tarball.
 
-- C++ 层拦截:**已自编译 veil-chromium 153**(ungoogled-chromium +
-  19 补丁:ninja/ThinLTO 官方构建)。screen 档位/`__width/__height` 真实
-  宿主窗口暴露、headless 环境遮蔽(Notification/permissions/hasFocus)、
-  系统色、种子化 deviceMemory(spec 封顶 8)全部 C++ 级生效,并有测试证明。
-- 真实字体度量:**度量兼容字体包**(Liberation/Carlito/Caladea/Gelasio,
-  woff2 内嵌按需注册),白名单字体宽度真实且不暴露宿主字体集。
-- TLS 指纹:**ja3 E2E 测试证明**自编译内核与 vanilla 内核 ClientHello
-  逐项一致(GREASE/扩展序随机性归一后);CDP 侧**移除 Runtime.enable**
-  (console.log 不再序列化参数,getter 探针测试锁定该行为)。
-- 行为层:**humanize 模块**(贝塞尔鼠标轨迹+过冲+落点、键入节奏+思考
-  停顿、惯性滚动),isTrusted E2E 证明事件可信且落点精确。
-- deviceMemory 上游补丁恒为 8 → 已改为种子派生并遵守 Device Memory API
-  的 8 GiB 封顶(16/32 是真 Chrome 不可能值,旧池反而是破绽)。
+## Roadmap (unfinished work)
 
-**仍开放(诚实清单)**:
+- **Proxy timing signals**: DNS/SSL handshake timing correlation is not
+  masked yet.
+- **Media-query layout consistency**: CSS layout viewport remains the real
+  host size; making it match the profiled screen needs C++-level relayout.
+- **Pure `engine="kernel"` residuals**: like-headless 38% (use `both`).
+- **macOS / Windows support** (currently Linux x86_64 only).
+- **Ecosystem**: Playwright/Puppeteer drop-in API, multi-language client
+  UI, Docker/remote-CDP service mode, profile-management GUI.
 
-- 代理计时信号(DNS/SSL 握手时序)未清除。
-- 媒体查询 vs 指纹屏幕:两引擎都保持窗口指标真实以通过 matchMedia 交叉
-  核对,CSS 布局视口仍是宿主真实尺寸(C++ 级重排才能彻底一致)。
-- 纯 `engine="kernel"` 模式的 like-headless 残余(JS 引擎的 Web Share/
-  ContentIndex/downlinkMax 等环境遮蔽不参与)——用 `both` 配置消除。
-- 生态:Playwright/Puppeteer drop-in API、多语言客户端、Docker/远程 CDP
-  服务模式、档案管理 GUI。
+## Acknowledgements
 
-已知残余:`engine="kernel"` 纯模式(不开 `js_overlay`)的纯文本 canvas 噪声
-取决于内核 static_bitmap_image 补丁;GPU 档位与平台联动在 kernel 模式由
-C++ 补丁决定(GPU 表内含 RTX 30–50 系/apple M 系)。SOCKS5 UDP ASSOCIATE
-按 RFC 拒绝,Chromium 回落 TCP。
+- [ungoogled-chromium](https://github.com/ungoogled-chromium/ungoogled-chromium)
+  — the base kernel and tooling.
+- [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium)
+  — the kernel patch-set ideas our `kernel-patches/` build on.
+- [Camoufox](https://github.com/daijro/camoufox) — design reference for
+  statistical realism and cross-signal coherence.
+- [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) — the
+  closed-source benchmark this project measures itself against; **no code
+  was taken from it** (its binary license prohibits reverse engineering).
+- Validation tools: CreepJS, Fingerprint/BotD, BrowserScan, PixelScan,
+  iphey, BroTector, sannysoft, Anti-CAPTCHA, deviceandbrowserinfo.
 
-## 许可
+## License
 
-veilbrowser 代码 MIT。`kernel-patches/` 来自 fingerprint-chromium
-(BSD-3-Clause);vanilla 内核遵循 ungoogled-chromium 相应许可,请从官方
-渠道获取。
+veilbrowser code: MIT (see [LICENSE](LICENSE)). `kernel-patches/` derives
+from fingerprint-chromium (BSD-3-Clause). Vanilla kernels follow
+ungoogled-chromium licensing — obtain them through official channels.
