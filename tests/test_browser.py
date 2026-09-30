@@ -102,8 +102,11 @@ class TestCanvasAndWebGL:
         assert canvas_for(41) != canvas_for(42)
 
     def test_disable_spoofing_canvas_makes_seeds_identical(self, make_browser):
+        # Same platform on both seeds: fonts legitimately differ across
+        # spoofed platforms (embedded metric clones vs the host fallback),
+        # so only a same-platform comparison isolates the canvas switch.
         def canvas_for(seed):
-            b = make_browser(FingerprintProfile(seed=seed,
+            b = make_browser(FingerprintProfile(seed=seed, platform="windows",
                                                 disable_spoofing=("canvas",)))
             with open_probe_page(b) as page:
                 return page.evaluate(CANVAS_JS)
@@ -115,7 +118,7 @@ class TestCanvasAndWebGL:
         (headless). Closed by engine="kernel" + js_overlay=True — see
         test_js_overlay_closes_text_canvas_gap."""
         def canvas_for(seed):
-            b = make_browser(FingerprintProfile(seed=seed))
+            b = make_browser(FingerprintProfile(seed=seed, platform="windows"))
             with open_probe_page(b) as page:
                 return page.evaluate("""
                     (() => { const c = document.createElement('canvas');

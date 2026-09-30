@@ -22,10 +22,13 @@ design:
   ninja/ThinLTO official build whose TLS layer is byte-for-byte
   ja3-verified against the stock binary.
 
-Since **v0.8.0** the kernel goes one step further: the whole JS fingerprint
-bundle is *compiled into the binary* (`engine="native"`) — a stock launch of
-the executable carries the full fingerprint with **zero external
-injection** (no CDP, no extension, no wrapper bootstrap to catch).
+Since **v0.9.0** the kernel goes all the way: **every fingerprint surface
+lives in Blink C++** — no JavaScript engine at all. Launching the executable
+with launch switches (`--fingerprint=… --fingerprint-platform=windows …`)
+yields the full fingerprint: identity, media queries, Windows font metrics
+(metric-compatible fonts embedded in the binary), speech voices, media
+devices, storage quota, audio sample rate and WebGL limits. Nothing is
+injected, nothing runs in the page that isn't the browser itself.
 
 The design references [Camoufox](https://github.com/daijro/camoufox)
 (statistical realism and cross-signal coherence) and
@@ -84,12 +87,13 @@ components are used** — no proprietary code is included or derived (see
   the stock binary's (normalized ja3, GREASE and extension-order
   randomization accounted for) — the patch layer never touches the network
   stack.
-- **Native mode** (`engine="native"`, v0.8.0): the fingerprint bundle is
-  embedded in the kernel binary (`kernel-patches/extra/veil`) and runs at
-  document-start in every main-world and worker context — the executable
-  alone is a fingerprint browser. Only a ~2.5 KB profile JSON reaches it,
-  through the `VEIL_PARAMS` environment variable; the metric-clone font
-  payloads are compiled in.
+- **Pure C++ engine** (`engine="kernel"`, v0.9.0): the whole fingerprint is
+  Blink C++ patches (`kernel-patches/extra/fingerprint/022-026`) driven by
+  launch switches only — media-query/screen consistency, embedded
+  metric-compatible fonts (Carlito/Caladea/Gelasio/Liberation), desktop
+  speech voices, media-device synthesis, desktop storage quota, 48 kHz
+  audio and GPU-plausible WebGL limits. Zero JS runs that isn't the
+  browser's own.
 - **Saved profiles**: `profile.save(path)` / `FingerprintProfile.load(path)`
   (and `veilbrowser profile-save`) — same file + same seed reproduces the
   same fingerprint for session reuse weeks later.
@@ -132,10 +136,10 @@ components are used** — no proprietary code is included or derived (see
 
 | engine | fingerprint implementation | kernel needed | use case |
 |--------|---------------------------|---------------|----------|
-| `js` (default) | inject.py bundle + CDP `Network.setUserAgentOverride` | any vanilla Chromium | track latest kernel |
-| `kernel` | veil-chromium C++ patches (`js_overlay=True` adds the canvas layer) | veil-chromium 153 | C++-level noise |
-| `both` | kernel patches + JS overlay | veil-chromium 153 | maximum coverage on a shared kernel |
-| `native` (recommended with veil-chromium) | bundle **compiled into the binary**, runs natively; nothing injected | veil-chromium ≥ v0.8.0 | **zero-injection stealth** |
+| `kernel` (default, recommended) | veil-chromium C++ patches driven by launch switches — **no JS, no injection** | veil-chromium ≥ v0.9.0 | **pure-engine stealth** |
+| `js` (legacy) | inject.py bundle + CDP `Network.setUserAgentOverride` | any vanilla Chromium | track latest kernel without rebuilding |
+| `both` (legacy) | kernel patches + JS overlay | veil-chromium 153 | maximum coverage on a shared kernel |
+| `native` | deprecated alias of `kernel` (the v0.8 compiled-in bundle was retired) | — | back-compat |
 
 ## Platform support
 
@@ -167,15 +171,16 @@ profile = from_preset("windows-us-office", seed=42)
 profile.timezone = "Asia/Tokyo"                        # or leave unset and
 profile.proxy = "socks5://user:pass@proxy.example.com:1080"  # let GeoIP align it
 
-with launch(profile, headless=True) as browser:        # engine="js" default
+with launch(profile, headless=True) as browser:        # engine="kernel" default
     with browser.new_page("https://example.com") as page:
         print(page.evaluate("navigator.userAgent"))
-
-# Native mode: the executable IS the fingerprint browser — nothing injected.
-# Requires a kernel built from kernel-patches/extra/veil (scripts/build-kernel.sh).
-with launch(profile, engine="native", headless=True) as browser:
-    print(browser.native_active)      # True: compiled-in bundle confirmed
+    print(browser.kernel_active)      # True: C++ spoofing confirmed live
     print(browser.proxy_check)        # exit-IP self-check through the proxy
+
+# The kernel reads launch switches only — no env vars, no injection:
+#   launch(profile, engine="kernel") spawns, e.g.,
+#   chrome --fingerprint=1001 --fingerprint-platform=windows
+#          --fingerprint-screen-width=1920 --timezone=America/New_York ...
 ```
 
 Persistence — reuse an identity across sessions:
@@ -250,25 +255,31 @@ Honest caveats, measured on the same sweep:
 
 Raw page evidence from the sweep: `/tmp/sitecheck/` on the test machine.
 
-### v0.8.0 native mode: zero injection, same results
+### v0.9.0 pure C++ kernel: zero JS, zero injection
 
-Same flagship profile (`windows-us-office`, seed 1001, headless) with
-`engine="native"` — the binary is launched bare with only the `VEIL_PARAMS`
-environment variable; **nothing is injected via CDP**:
+Flagship profile (`windows-us-office`, seed 1001, headless) with
+`engine="kernel"` — the process is launched with switches only; **no JS
+exists in the page beyond the browser's own** (`typeof veilNativeCfg ===
+"undefined"`, `typeof __veil_installed === "undefined"`):
 
-| Detector | native result |
+| Detector | pure-kernel result |
 |---|---|
-| [bot.sannysoft.com](https://bot.sannysoft.com/) | **30/30 checks passed, 0 failed** |
-| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **0 lies** · stealth **0%** · like-headless 6% — parity with `engine="both"` |
+| [bot.sannysoft.com](https://bot.sannysoft.com/) | **57/57 rows passed, 0 failed** |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **0 lies** · headless **0%** · stealth **0%** (like-headless 38% — soft env classification, see roadmap) |
 | [deviceandbrowserinfo.com](https://deviceandbrowserinfo.com/are_you_a_bot) | `"isBot": false` |
 | [BroTector](https://ttlns.github.io/brotector/) | **Average 0, zero detection rows** (trusted humanized click) |
 
-Evidence: `/tmp/nativecheck/` on the test machine.
+Font metrics on a fontless Linux host now match real Windows Chrome exactly
+(measureText `mmmmmmmmmmlli` @72px): Arial 647.75, Calibri 624.73, Cambria
+644.33, Times New Roman 620.05, Courier New 561.69, Georgia 696.52 — served
+from metric-compatible fonts embedded in the binary.
+
+Evidence: `/tmp/kernel_e2e/` on the test machine.
 
 ## Tests
 
 ```bash
-python -m pytest tests/ -q     # 142 tests green (unit + kernel integration)
+python -m pytest tests/ -q     # 144 tests green (unit + kernel integration)
 ```
 
 CI (GitHub Actions) runs the unit layer; tests that drive a real Chromium
@@ -310,8 +321,14 @@ tarball.
 
 - **Proxy timing signals**: DNS/SSL handshake timing correlation is not
   masked yet.
-- **Media-query layout consistency**: CSS layout viewport remains the real
-  host size; making it match the profiled screen needs C++-level relayout.
+- **CreepJS like-headless residual (38%)**: zero lies, 0% headless, 0%
+  stealth, but CreepJS's soft environment classification still weights the
+  profile as headless-*like* (datacenter host + SwiftShader env cues).
+  `engine="both"` scores 6% if you need that last soft point.
+- **Media-query layout viewport**: pointer/hover/device-size/DPR queries are
+  now consistent with the profile (C++), but the CSS *layout* viewport
+  remains the real host window size; relayout to the profiled screen needs
+  deeper C++ work.
 - **Android profiles** (CloakBrowser #533-style request): needs kernel
   platform switches plus mobile GPU/screen pools.
 - **macOS / Windows support** (currently Linux x86_64 only).

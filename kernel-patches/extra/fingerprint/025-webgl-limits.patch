@@ -1,0 +1,68 @@
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+index ef2f29f..1f6c11b 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -46,8 +46,10 @@
+ #include "base/trace_event/memory_dump_manager.h"
+ #include "base/trace_event/trace_event.h"
+ #include "build/build_config.h"
++#include "base/strings/string_util.h"
+ #include "components/ungoogled/ungoogled_switches.h"
+ #include "components/viz/common/gpu/raster_context_provider.h"
++#include "third_party/blink/renderer/modules/webgl/gpu_fingerprint.h"
+ #include "components/viz/common/resources/shared_image_format_utils.h"
+ #include "device/vr/buildflags/buildflags.h"
+ #include "device/vr/public/mojom/vr_service.mojom-blink-forward.h"
+@@ -7954,6 +7956,25 @@ ScriptValue WebGLRenderingContextBase::GetFloatParameter(
+   return WebGLAny(script_state, value);
+ }
+ 
++namespace {
++
++// veilbrowser: plausible texture-size ceiling for the spoofed GPU. NVIDIA
++// desktop parts report 32768; the rest of the desktop field reports 16384.
++int64_t VeilWebGLSizeLimit(int64_t swiftshader_value) {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (!command_line->HasSwitch(switches::kFingerprint)) {
++    return swiftshader_value;
++  }
++  static const int64_t kLimit = [] {
++    std::string renderer = GetGLRendererStringForFingerprint();
++    return renderer.find("NVIDIA") != std::string::npos ? 32768 : 16384;
++  }();
++  return kLimit;
++}
++
++}  // namespace
++
+ ScriptValue WebGLRenderingContextBase::GetIntParameter(
+     ScriptState* script_state,
+     GLenum pname) {
+@@ -7961,6 +7982,14 @@ ScriptValue WebGLRenderingContextBase::GetIntParameter(
+   if (!isContextLost()) {
+     ContextGL()->GetIntegerv(pname, &value);
+     switch (pname) {
++      case GL_MAX_TEXTURE_SIZE:
++      case GL_MAX_RENDERBUFFER_SIZE:
++      case GL_MAX_CUBE_MAP_TEXTURE_SIZE:
++        // veilbrowser: the SwiftShader fallback reports 8192 where a real
++        // desktop GPU reports 16k/32k; keep limits consistent with the
++        // spoofed renderer string.
++        value = static_cast<GLint>(VeilWebGLSizeLimit(value));
++        break;
+       case GL_IMPLEMENTATION_COLOR_READ_FORMAT:
+       case GL_IMPLEMENTATION_COLOR_READ_TYPE:
+         if (value == 0) {
+@@ -8024,6 +8053,11 @@ ScriptValue WebGLRenderingContextBase::GetWebGLIntArrayParameter(
+   std::array<GLint, 4> value = {0};
+   if (!isContextLost())
+     ContextGL()->GetIntegerv(pname, value.data());
++  if (pname == GL_MAX_VIEWPORT_DIMS && value[0] > 0) {
++    GLint limit = static_cast<GLint>(VeilWebGLSizeLimit(value[0]));
++    value[0] = limit;
++    value[1] = limit;
++  }
+   unsigned length = 0;
+   switch (pname) {
+     case GL_MAX_VIEWPORT_DIMS:

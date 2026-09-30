@@ -10,12 +10,12 @@ from .profile import PRESETS, FingerprintProfile, from_preset
 
 
 def _add_engine_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--engine", choices=("js", "kernel", "both", "native"),
-                   default="js",
-                   help="js = our injected bundle on any kernel (default); "
-                        "kernel = fingerprint-chromium patches; both = stacked; "
-                        "native = bundle compiled into the veil kernel "
-                        "(requires a kernel built from kernel-patches/extra/veil)")
+    p.add_argument("--engine", choices=("kernel", "js", "both", "native"),
+                   default="kernel",
+                   help="kernel = pure C++ engine, launch switches only "
+                        "(default, requires the veil kernel); "
+                        "js = injected bundle on any kernel (legacy); "
+                        "both = stacked (legacy); native = kernel alias")
     p.add_argument("--vanilla", action="store_true",
                    help="prefer the vanilla ungoogled-chromium binary (engine=js)")
 

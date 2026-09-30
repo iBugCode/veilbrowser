@@ -17,9 +17,12 @@
 veil-chromium 内核**——ungoogled-chromium 153 + C++ 指纹补丁
 （ninja/ThinLTO 全量构建，TLS 层经 ja3 E2E 证明与原版逐字节同策略）。
 
-**v0.8.0** 起内核更进一步：整套 JS 指纹 bundle **直接编译进可执行文件**
-（`engine="native"`）——裸启动浏览器即自带完整指纹，**零外部注入**
-（无 CDP、无扩展、没有可被察觉的 wrapper 引导过程）。
+**v0.9.0** 起内核彻底告别 JS 引擎：**所有指纹面全部落在 Blink C++**。
+裸启动可执行文件、只给启动参数（`--fingerprint=…
+--fingerprint-platform=windows …`）即可得到完整指纹——身份、媒体查询、
+Windows 字体度量（度量兼容字体编译进二进制）、语音列表、媒体设备、
+存储配额、音频采样率、WebGL 上限。页面里运行的只有浏览器自己的代码，
+没有任何注入。
 
 设计参考 [Camoufox](https://github.com/daijro/camoufox)（统计真实感与
 跨信号一致性思路）与
@@ -67,11 +70,11 @@ veil-chromium 内核**——ungoogled-chromium 153 + C++ 指纹补丁
   来自真实字形。
 - **TLS 指纹**：补丁内核 ClientHello 经归一化 ja3 对比与原版一致
   （GREASE 与扩展序随机性已归一）——补丁层不触碰网络栈。
-- **原生模式**（`engine="native"`，v0.8.0）：指纹 bundle 内嵌于内核二进制
-  （`kernel-patches/extra/veil`），在每个主世界与 worker 上下文的
-  document-start 原生执行——可执行文件本身即指纹浏览器。运行时仅经
-  `VEIL_PARAMS` 环境变量传入约 2.5 KB 的档位 JSON，度量兼容字体数据
-  编译进二进制。
+- **纯 C++ 引擎**（`engine="kernel"`，v0.9.0）：整套指纹是 Blink C++ 补丁
+  （`kernel-patches/extra/fingerprint/022-026`），仅由启动参数驱动——
+  媒体查询/屏幕一致性、内嵌度量兼容字体（Carlito/Caladea/Gelasio/
+  Liberation）、桌面语音列表、媒体设备合成、桌面存储配额、48 kHz 音频、
+  与 GPU 相符的 WebGL 上限。除浏览器自身代码外零 JS。
 - **持久化档案**：`profile.save(path)` / `FingerprintProfile.load(path)`
   （及 `veilbrowser profile-save`）——同一档案文件 + 同一 seed，数周后
   复用仍是同一指纹（Camoufox #38/#442、CloakBrowser #320 同类需求）。
@@ -112,10 +115,10 @@ veil-chromium 内核**——ungoogled-chromium 153 + C++ 指纹补丁
 
 | engine | 指纹实现 | 内核要求 | 适用 |
 |--------|----------|----------|------|
-| `js`（默认） | inject.py bundle + CDP `Network.setUserAgentOverride` | 任何 vanilla Chromium | 跟随最新内核 |
-| `kernel` | veil-chromium C++ 补丁（`js_overlay=True` 叠加 canvas 层） | veil-chromium 153 | C++ 级噪声 |
-| `both` | 内核补丁 + JS 叠加 | veil-chromium 153 | 共用内核时的最大覆盖 |
-| `native`（配 veil-chromium 推荐） | bundle **编译进二进制**原生执行，无任何注入 | veil-chromium ≥ v0.8.0 | **零注入隐身** |
+| `kernel`（默认，推荐） | veil-chromium C++ 补丁，仅由启动参数驱动——**无 JS、无注入** | veil-chromium ≥ v0.9.0 | **纯引擎隐身** |
+| `js`（传统） | inject.py bundle + CDP `Network.setUserAgentOverride` | 任何 vanilla Chromium | 不重编内核跟随最新版 |
+| `both`（传统） | 内核补丁 + JS 叠加 | veil-chromium 153 | 共用内核时的最大覆盖 |
+| `native` | 已废弃，`kernel` 的别名（v0.8 编译进二进制的 bundle 已退役） | — | 兼容旧调用 |
 
 ## 平台支持
 
@@ -215,24 +218,31 @@ headless：
 
 巡检原始证据文本在测试机的 `/tmp/sitecheck/`。
 
-### v0.8.0 原生模式：零注入，同等成绩
+### v0.9.0 纯 C++ 内核：零 JS、零注入
 
-同一旗舰档位（`windows-us-office`，seed 1001，headless），`engine="native"`
-——裸启动二进制、仅带 `VEIL_PARAMS` 环境变量，**CDP 不注入任何东西**：
+旗舰档位（`windows-us-office`，seed 1001，headless），`engine="kernel"`
+——进程仅由启动参数拉起，**页面中除浏览器自身外不存在任何 JS**
+（`typeof veilNativeCfg === "undefined"`、`typeof __veil_installed ===
+"undefined"`）：
 
-| 检测站 | 原生模式结果 |
+| 检测站 | 纯内核结果 |
 |---|---|
-| [bot.sannysoft.com](https://bot.sannysoft.com/) | **30/30 检查项全部通过，0 失败** |
-| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **0 lie** · stealth **0%** · like-headless 6%——与 `engine="both"` 持平 |
+| [bot.sannysoft.com](https://bot.sannysoft.com/) | **57/57 全部通过，0 失败** |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **0 lie** · headless **0%** · stealth **0%**（like-headless 38%——软性环境分类，见路线图） |
 | [deviceandbrowserinfo.com](https://deviceandbrowserinfo.com/are_you_a_bot) | `"isBot": false` |
 | [BroTector](https://ttlns.github.io/brotector/) | **Average 0，零检出**（受信人化点击） |
 
-证据在测试机 `/tmp/nativecheck/`。
+无字体 Linux 宿主上的文字度量与真实 Windows Chrome 完全一致
+（measureText `mmmmmmmmmmlli` @72px）：Arial 647.75、Calibri 624.73、
+Cambria 644.33、Times New Roman 620.05、Courier New 561.69、
+Georgia 696.52——由编译进二进制的度量兼容字体直接给出。
+
+证据在测试机 `/tmp/kernel_e2e/`。
 
 ## 测试
 
 ```bash
-python -m pytest tests/ -q     # 142 项全绿（单元 + 内核集成）
+python -m pytest tests/ -q     # 144 项全绿（单元 + 内核集成）
 ```
 
 CI（GitHub Actions）只跑单元层；驱动真实 Chromium 内核的测试在找不到
@@ -262,12 +272,12 @@ bash scripts/build-kernel.sh dist/        # 约 100 GB 磁盘，8 核约 100 分
 
 或在自有 runner 上跑 `kernel (self-hosted)` GitHub Actions 工作流
 （托管 runner 磁盘不够）。脚本会下载 ungoogled-chromium、prune、套用
-上游 + 指纹补丁、域替换，产出 `veil-chromium-*.tar.zst` 内核包。补丁
-序列的最后一项 `extra/veil/native-inject.patch` 把 JS 指纹 bundle 编译进
-二进制（`engine="native"` 的本体）；改动 `veilbrowser/inject.py` 或
-`fontpack.py` 后用
-`.venv/bin/python scripts/gen_native_patch.py --tree <checkout>` 重新
-生成。
+上游 + 指纹补丁、域替换，产出 `veil-chromium-*.tar.zst` 内核包。
+`022-026` 是纯 C++ 引擎补丁：媒体查询/屏幕一致性、内嵌度量字体、桌面
+环境（voices/mediaDevices/配额/采样率）、WebGL 上限与窗口 devicePixelRatio。
+改动构建树后用 `python3 scripts/gen_kernel_patches.py --tree <checkout>`
+重新生成（字体载荷在 `scripts/kernel-fonts/`，由
+`scripts/gen_metric_fonts.py` 生成进内核源码）。
 
 ## 路线图（未完成工作）
 

@@ -128,4 +128,11 @@ extra/fingerprint/014-client-rects.patch
 extra/fingerprint/015-canvas-measure-text.patch
 extra/fingerprint/016-webgl-readPixels.patch
 extra/fingerprint/018-timezone.patch
-extra/veil/native-inject.patch
+extra/fingerprint/019-screen-fingerprint.patch
+extra/fingerprint/020-headless-env.patch
+extra/fingerprint/021-system-colors.patch
+extra/fingerprint/022-media-consistency.patch
+extra/fingerprint/023-embedded-fonts.patch
+extra/fingerprint/024-desktop-env.patch
+extra/fingerprint/025-webgl-limits.patch
+extra/fingerprint/026-window-dpr.patch

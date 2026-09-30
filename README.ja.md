@@ -22,11 +22,13 @@
   （ninja/ThinLTO フルビルド。TLS レイヤーは ja3 E2E により
   ストックバイナリと同一戦略であることを検証済み）。
 
-**v0.8.0** からはカーネルがさらに一歩進み、JS 指紋バンドル全体を
-**バイナリにコンパイル込み**にできるようになりました
-（`engine="native"`）——実行ファイルをそのまま起動するだけで完全な
-指紋が効き、**外部注入はゼロ**（CDP も拡張も、検知されうる wrapper の
-ブートストラップもありません）。
+**v0.9.0** からはカーネルから JS エンジンが完全に姿を消しました:
+**すべての指紋面が Blink の C++ に存在します**。実行ファイルを起動
+スイッチ（`--fingerprint=… --fingerprint-platform=windows …`）だけと
+ともに起動すれば完全な指紋が効きます——識別情報・メディアクエリ・
+Windows フォントメトリック（メトリック互換フォントをバイナリに埋め込み）・
+音声リスト・メディアデバイス・ストレージquota・オーディオ サンプルレート・
+WebGL 上限。ページで動くのはブラウザ自身のコードだけで、注入は一切なし。
 
 設計は [Camoufox](https://github.com/daijro/camoufox)（統計的なリアリティ
 とシグナル間一貫性）と [CloakBrowser](https://github.com/CloakHQ/CloakBrowser)
@@ -80,12 +82,12 @@
 - **TLS 指紋**：パッチ済みカーネルの ClientHello は正規化 ja3 比較で
   ストックバイナリと一致することを証明（GREASE と拡張順序のランダム化を
   吸収）——パッチ層はネットワークスタックに触れません。
-- **ネイティブ モード**（`engine="native"`、v0.8.0）：指紋バンドルを
-  カーネル バイナリに埋め込み（`kernel-patches/extra/veil`）、すべての
-  メインワールドおよび worker コンテキストで document-start にネイティブ
-  実行——実行ファイル単体で指紋ブラウザになります。実行時に渡すのは
-  `VEIL_PARAMS` 環境変数経由の約 2.5 KB のプロファイル JSON のみで、
-  メトリック互換フォントのペイロードはバイナリに埋め込み済み。
+- **純 C++ エンジン**（`engine="kernel"`、v0.9.0）：指紋の全体が Blink C++
+  パッチ（`kernel-patches/extra/fingerprint/022-026`）で、起動スイッチの
+  みで駆動——メディアクエリ/画面整合、埋め込みメトリック互換フォント
+  （Carlito/Caladea/Gelasio/Liberation）、デスクトップ音声リスト、
+  メディアデバイス合成、デスクトップ ストレージ quota、48 kHz オーディオ、
+  GPU に整合した WebGL 上限。ブラウザ自身以外の JS はゼロ。
 - **プロファイル永続化**：`profile.save(path)` /
   `FingerprintProfile.load(path)`（および `veilbrowser profile-save`）
   ——同一ファイル + 同一シードなら数週間後でも同一指紋を再現（Camoufox
@@ -129,10 +131,10 @@
 
 | engine | 指紋の実装 | 必要なカーネル | 用途 |
 |--------|-----------|----------------|------|
-| `js`（既定） | inject.py バンドル + CDP `Network.setUserAgentOverride` | 任意の vanilla Chromium | 最新カーネル追従 |
-| `kernel` | veil-chromium の C++ パッチ（`js_overlay=True` で canvas 層を追加） | veil-chromium 153 | C++ レベルのノイズ |
-| `both` | カーネルパッチ + JS オーバーレイ | veil-chromium 153 | 共用カーネルでの最大カバレッジ |
-| `native`（veil-chromium 推奨） | バンドルを**バイナリにコンパイル込み**でネイティブ実行。注入なし | veil-chromium ≥ v0.8.0 | **ゼロ注入ステルス** |
+| `kernel`（既定・推奨） | veil-chromium の C++ パッチを起動スイッチのみで駆動——**JS も注入もゼロ** | veil-chromium ≥ v0.9.0 | **純エンジン ステルス** |
+| `js`（レガシー） | inject.py バンドル + CDP `Network.setUserAgentOverride` | 任意の vanilla Chromium | 再ビルドせず最新カーネル追従 |
+| `both`（レガシー） | カーネルパッチ + JS オーバーレイ | veil-chromium 153 | 共用カーネルでの最大カバレッジ |
+| `native` | 非推奨 — `kernel` の別名（v0.8 の埋め込みバンドルは廃止） | — | 後方互換 |
 
 ## プラットフォーム対応
 
@@ -165,15 +167,16 @@ profile = from_preset("windows-us-office", seed=42)
 profile.timezone = "Asia/Tokyo"                        # 未設定なら GeoIP が整合
 profile.proxy = "socks5://user:pass@proxy.example.com:1080"
 
-with launch(profile, headless=True) as browser:        # 既定 engine="js"
+with launch(profile, headless=True) as browser:   # 既定 engine="kernel"
     with browser.new_page("https://example.com") as page:
         print(page.evaluate("navigator.userAgent"))
-
-# ネイティブ モード：実行ファイル自体が指紋ブラウザ——注入ゼロ。
-# kernel-patches/extra/veil 由来のカーネルが必要（scripts/build-kernel.sh）。
-with launch(profile, engine="native", headless=True) as browser:
-    print(browser.native_active)      # True：埋め込みバンドルの動作を確認
+    print(browser.kernel_active)      # True：C++ 偽装の稼働を確認
     print(browser.proxy_check)        # プロキシ経由の退出 IP セルフチェック
+
+# カーネルは起動スイッチのみを受け取る——環境変数も注入も不要:
+#   launch(profile, engine="kernel") は例えば次を起動する:
+#   chrome --fingerprint=1001 --fingerprint-platform=windows
+#          --fingerprint-screen-width=1920 --timezone=America/New_York ...
 ```
 
 永続化——同一アイデンティティをセッション間で再利用：
@@ -237,25 +240,31 @@ veilbrowser path                                                        # カー
 
 巡回の生エビデンスはテスト機の `/tmp/sitecheck/` にあります。
 
-### v0.8.0 ネイティブ モード：注入ゼロで同等の結果
+### v0.9.0 純 C++ カーネル：JS ゼロ、注入ゼロ
 
-同じフラッグシップ プロファイル（`windows-us-office`、seed 1001、
-headless）を `engine="native"` で実行——`VEIL_PARAMS` 環境変数だけを持たせ
-てバイナリを素起動し、**CDP では何も注入していません**：
+フラッグシップ プロファイル（`windows-us-office`、seed 1001、headless）を
+`engine="kernel"` で実行——プロセスは起動スイッチだけで立ち上がり、
+**ページにはブラウザ自身の JS しか存在しません**（`typeof veilNativeCfg ===
+"undefined"`、`typeof __veil_installed === "undefined"`）：
 
-| 検出サイト | ネイティブ結果 |
+| 検出サイト | 純カーネル結果 |
 |---|---|
-| [bot.sannysoft.com](https://bot.sannysoft.com/) | **30/30 項目すべて合格、失敗 0** |
-| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **lie 0** · stealth **0%** · like-headless 6%——`engine="both"` と同等 |
+| [bot.sannysoft.com](https://bot.sannysoft.com/) | **57/57 すべて合格、失敗 0** |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **lie 0** · headless **0%** · stealth **0%**（like-headless 38% — ソフト環境分類、ロードマップ参照） |
 | [deviceandbrowserinfo.com](https://deviceandbrowserinfo.com/are_you_a_bot) | `"isBot": false` |
 | [BroTector](https://ttlns.github.io/brotector/) | **Average 0、検出ゼロ**（trusted ヒューマナイズド クリック） |
 
-エビデンスはテスト機の `/tmp/nativecheck/`。
+フォントのない Linux ホスト上でも文字メトリックは実 Windows Chrome と
+完全に一致（measureText `mmmmmmmmmmlli` @72px）：Arial 647.75、
+Calibri 624.73、Cambria 644.33、Times New Roman 620.05、Courier New 561.69、
+Georgia 696.52——バイナリに埋め込んだメトリック互換フォントから供給。
+
+エビデンスはテスト機の `/tmp/kernel_e2e/`。
 
 ## テスト
 
 ```bash
-python -m pytest tests/ -q     # 142 テスト全緑（ユニット + カーネル統合）
+python -m pytest tests/ -q     # 144 テスト全緑（ユニット + カーネル統合）
 ```
 
 CI（GitHub Actions）はユニット層のみ実行。実際の Chromium カーネルを
@@ -290,17 +299,24 @@ bash scripts/build-kernel.sh dist/        # 約 100 GB ディスク、8 コア�
 実行（ホステッド ランナーはディスクが足りません）。スクリプトは
 ungoogled-chromium をダウンロードし、prune、上流 + 指紋パッチ適用、
 ドメイン置換を行い、`veil-chromium-*.tar.zst` カーネル tarball を生成します。
-パッチ列の最後 `extra/veil/native-inject.patch` が JS 指紋バンドルを
-バイナリにコンパイル込みます（`engine="native"` の本体）。
-`veilbrowser/inject.py` か `fontpack.py` を変更した場合は
-`.venv/bin/python scripts/gen_native_patch.py --tree <checkout>` で
-再生成してください。
+`022-026` が純 C++ エンジン パッチです：メディアクエリ/画面整合、
+埋め込みメトリック フォント、デスクトップ環境（voices/mediaDevices/quota/
+サンプルレート）、WebGL 上限、window.devicePixelRatio。ビルドツリーを
+変更したら `python3 scripts/gen_kernel_patches.py --tree <checkout>` で
+再生成してください（フォント ペイロードは `scripts/kernel-fonts/`、
+`scripts/gen_metric_fonts.py` でカーネル ソースに展開）。
 
 ## ロードマップ（未完了の作業）
 
 - **プロキシ タイミング シグナル**：DNS/SSL ハンドシェイク時序の相関は
   まだマスキングされていません。
-- **メディアクエリ レイアウト整合**：CSS レイアウト ビューポートは実ホスト
+- **CreepJS like-headless 残余（38%）**：lie 0・headless 0%・stealth 0%
+  だが、CreepJS のソフト環境分類は still「ヘッドレス類似」と判定
+  （データセンター網 + SwiftShader 環境の手がかり）。最後のソフト点が
+  必要なら `engine="both"`（6%）。
+- **メディアクエリ レイアウト ビューポート**：pointer/hover/デバイス サイズ/
+  DPR クエリはプロファイルと一致（C++）。ただし CSS *レイアウト*
+  ビューポートは実ホスト
   サイズのまま。プロファイル画面と完全一致させるには C++ レベルの再
   レイアウトが必要。
 - **Android プロファイル**（CloakBrowser #533 と同種の要望）：カーネルの

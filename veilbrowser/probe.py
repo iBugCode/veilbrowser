@@ -8,7 +8,9 @@ _PROBE_JS = r"""
 (async () => {
   const r = {};
   const nav = navigator;
-  r.nativeEngine = typeof veilNativeCfg === 'function';
+  r.kernelEngine = matchMedia('(pointer: fine)').matches &&
+                   matchMedia('(hover: hover)').matches &&
+                   nav.plugins.length > 0;
   r.userAgent = nav.userAgent;
   r.platform = nav.platform;
   r.webdriver = nav.webdriver;

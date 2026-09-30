@@ -21,7 +21,7 @@ from .humanize import HumanInput
 from .probe import check, check_exit_ip, collect, print_report
 from .upgrade import latest_release, upgrade as upgrade_kernel
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 __all__ = [
     "Browser", "CDP", "CDPError", "DevTools", "FingerprintProfile", "PRESETS",

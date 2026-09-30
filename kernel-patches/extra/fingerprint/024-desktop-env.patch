@@ -1,0 +1,241 @@
+diff --git a/third_party/blink/renderer/modules/mediastream/media_devices.cc b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+index 4fe2cb4..40ee2a3 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_devices.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/modules/mediastream/media_devices.h"
+ 
++#include "base/command_line.h"
++
+ #include <algorithm>
+ #include <utility>
+ 
+@@ -1414,6 +1416,60 @@ void MediaDevices::DevicesEnumerated(
+   LogDevicesEnumerated(result_tracker, enumeration, video_input_capabilities,
+                        audio_input_capabilities);
+ 
++  // veilbrowser: headless hosts enumerate zero media devices; a real
++  // desktop always has at least one audio input and output. Synthesize
++  // them so the device list matches the spoofed platform.
++  Vector<Vector<WebMediaDeviceInfo>> veil_devices;
++  {
++    const base::CommandLine* command_line =
++        base::CommandLine::ForCurrentProcess();
++    bool synthesize =
++        command_line->HasSwitch("fingerprint") &&
++        enumeration.size() ==
++            static_cast<wtf_size_t>(
++                mojom::blink::MediaDeviceType::kNumMediaDeviceTypes) &&
++        enumeration[static_cast<wtf_size_t>(
++                mojom::blink::MediaDeviceType::kMediaAudioInput)]
++            .empty() &&
++        enumeration[static_cast<wtf_size_t>(
++                mojom::blink::MediaDeviceType::kMediaVideoInput)]
++            .empty() &&
++        enumeration[static_cast<wtf_size_t>(
++                mojom::blink::MediaDeviceType::kMediaAudioOutput)]
++            .empty();
++    if (synthesize) {
++      veil_devices = enumeration;
++      unsigned seed = 0;
++      std::string seed_str = command_line->GetSwitchValueASCII("fingerprint");
++      if (!seed_str.empty()) {
++        seed = static_cast<unsigned>(std::stoull(seed_str));
++      }
++      for (auto type : {mojom::blink::MediaDeviceType::kMediaAudioInput,
++                        mojom::blink::MediaDeviceType::kMediaAudioOutput}) {
++        WebMediaDeviceInfo info;
++        uint64_t hash =
++            static_cast<uint64_t>(seed) * 6364136223846793005ULL +
++            (static_cast<uint64_t>(type) + 1) * 1442695040888963407ULL;
++        char hex[65];
++        const char* digits = "0123456789abcdef";
++        for (int k = 0; k < 32; ++k) {
++          hash = hash * 6364136223846793005ULL + 1442695040888963407ULL;
++          hex[k * 2] = digits[(hash >> 60) & 0xf];
++          hex[k * 2 + 1] = digits[(hash >> 56) & 0xf];
++        }
++        hex[64] = 0;
++        info.device_id = hex;
++        info.group_id = hex;
++        veil_devices[static_cast<wtf_size_t>(type)].push_back(info);
++      }
++    }
++  }
++  const Vector<Vector<WebMediaDeviceInfo>>& enumeration_final =
++      veil_devices.empty()
++          ? enumeration
++          : static_cast<const Vector<Vector<WebMediaDeviceInfo>>&>(
++                veil_devices);
++
+   auto it = enumerate_device_requests_.find(result_tracker);
+   if (it == enumerate_device_requests_.end()) {
+     SendLogMessage(base::StringPrintf(
+@@ -1432,16 +1488,16 @@ void MediaDevices::DevicesEnumerated(
+ 
+   DCHECK_EQ(static_cast<wtf_size_t>(
+                 mojom::blink::MediaDeviceType::kNumMediaDeviceTypes),
+-            enumeration.size());
++            enumeration_final.size());
+ 
+   if (!video_input_capabilities.empty()) {
+-    DCHECK_EQ(enumeration[static_cast<wtf_size_t>(
++    DCHECK_EQ(enumeration_final[static_cast<wtf_size_t>(
+                               mojom::blink::MediaDeviceType::kMediaVideoInput)]
+                   .size(),
+               video_input_capabilities.size());
+   }
+   if (!audio_input_capabilities.empty()) {
+-    DCHECK_EQ(enumeration[static_cast<wtf_size_t>(
++    DCHECK_EQ(enumeration_final[static_cast<wtf_size_t>(
+                               mojom::blink::MediaDeviceType::kMediaAudioInput)]
+                   .size(),
+               audio_input_capabilities.size());
+@@ -1453,10 +1509,10 @@ void MediaDevices::DevicesEnumerated(
+        i < static_cast<wtf_size_t>(
+                mojom::blink::MediaDeviceType::kNumMediaDeviceTypes);
+        ++i) {
+-    for (wtf_size_t j = 0; j < enumeration[i].size(); ++j) {
++    for (wtf_size_t j = 0; j < enumeration_final[i].size(); ++j) {
+       mojom::blink::MediaDeviceType device_type =
+           static_cast<mojom::blink::MediaDeviceType>(i);
+-      WebMediaDeviceInfo device_info = enumeration[i][j];
++      WebMediaDeviceInfo device_info = enumeration_final[i][j];
+       String device_label = String::FromUtf8(device_info.label);
+       if (device_type == mojom::blink::MediaDeviceType::kMediaAudioInput ||
+           device_type == mojom::blink::MediaDeviceType::kMediaVideoInput) {
+diff --git a/third_party/blink/renderer/modules/quota/storage_manager.cc b/third_party/blink/renderer/modules/quota/storage_manager.cc
+index ef1c723..8fe188a 100644
+--- a/third_party/blink/renderer/modules/quota/storage_manager.cc
++++ b/third_party/blink/renderer/modules/quota/storage_manager.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/modules/quota/storage_manager.h"
+ 
++#include "base/command_line.h"
++
+ #include "mojo/public/cpp/bindings/callback_helpers.h"
+ #include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
+ #include "third_party/blink/public/mojom/quota/quota_types.mojom-blink.h"
+@@ -68,6 +70,22 @@ void QueryStorageUsageAndQuotaCallback(
+     return;
+   }
+ 
++  // veilbrowser: the headless host's free-disk-space-derived quota leaks
++  // the machine's storage layout; report a desktop-typical value instead.
++  {
++    const base::CommandLine* command_line =
++        base::CommandLine::ForCurrentProcess();
++    if (command_line->HasSwitch("fingerprint")) {
++      static constexpr int64_t kDesktopQuotas[] = {
++          322122547200, 214748364800, 536870912000};
++      unsigned seed = 0;
++      std::string seed_str = command_line->GetSwitchValueASCII("fingerprint");
++      if (!seed_str.empty()) {
++        seed = static_cast<unsigned>(std::stoull(seed_str));
++      }
++      quota_in_bytes = kDesktopQuotas[seed % std::size(kDesktopQuotas)];
++    }
++  }
+   StorageEstimate* estimate = StorageEstimate::Create();
+   estimate->setUsage(usage_in_bytes);
+   estimate->setQuota(quota_in_bytes);
+diff --git a/third_party/blink/renderer/modules/speech/speech_synthesis.cc b/third_party/blink/renderer/modules/speech/speech_synthesis.cc
+index 891a815..c54a623 100644
+--- a/third_party/blink/renderer/modules/speech/speech_synthesis.cc
++++ b/third_party/blink/renderer/modules/speech/speech_synthesis.cc
+@@ -25,6 +25,9 @@
+ 
+ #include "third_party/blink/renderer/modules/speech/speech_synthesis.h"
+ 
++#include "base/command_line.h"
++#include "base/strings/string_util.h"
++
+ #include <tuple>
+ 
+ #include "build/build_config.h"
+@@ -84,6 +87,49 @@ SpeechSynthesis::SpeechSynthesis(LocalDOMWindow& window)
+ 
+ void SpeechSynthesis::OnSetVoiceList(
+     Vector<mojom::blink::SpeechSynthesisVoicePtr> mojom_voices) {
++  // veilbrowser: hosts without a platform TTS engine (typical Linux
++  // servers) report zero voices, itself a headless tell. Synthesize the
++  // stock voice list of the spoofed platform instead.
++  {
++    const base::CommandLine* command_line =
++        base::CommandLine::ForCurrentProcess();
++    if (command_line->HasSwitch("fingerprint") && mojom_voices.empty()) {
++      struct VeilVoice {
++        const char* name;
++        const char* lang;
++      };
++      static constexpr VeilVoice kWindowsVoices[] = {
++          {"Microsoft David - English (United States)", "en-US"},
++          {"Microsoft Zira - English (United States)", "en-US"},
++          {"Microsoft Mark - English (United States)", "en-US"},
++      };
++      static constexpr VeilVoice kMacOSVoices[] = {
++          {"Samantha", "en-US"}, {"Alex", "en-US"}, {"Karen", "en-AU"},
++          {"Daniel", "en-GB"}, {"Ting-Ting", "zh-CN"}, {"Kyoko", "ja-JP"},
++          {"Thomas", "fr-FR"}, {"Anna", "de-DE"},
++      };
++      std::string platform = base::ToLowerASCII(
++          command_line->GetSwitchValueASCII("fingerprint-platform"));
++      const VeilVoice* voices = nullptr;
++      size_t voice_count = 0;
++      if (platform == "windows") {
++        voices = kWindowsVoices;
++        voice_count = std::size(kWindowsVoices);
++      } else if (platform == "macos") {
++        voices = kMacOSVoices;
++        voice_count = std::size(kMacOSVoices);
++      }
++      for (size_t i = 0; voices && i < voice_count; ++i) {
++        auto voice = mojom::blink::SpeechSynthesisVoice::New();
++        voice->voice_uri = voices[i].name;
++        voice->name = voices[i].name;
++        voice->lang = voices[i].lang;
++        voice->is_local_service = true;
++        voice->is_default = (i == 0);
++        mojom_voices.push_back(std::move(voice));
++      }
++    }
++  }
+   voice_list_.clear();
+   for (auto& mojom_voice : mojom_voices) {
+     voice_list_.push_back(
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/third_party/blink/renderer/modules/webaudio/audio_context.cc
+index 78c53ba..08157bf 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_context.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_context.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "third_party/blink/renderer/modules/webaudio/audio_context.h"
+ 
++#include "base/command_line.h"
++#include "base/strings/string_util.h"
++
+ #include <algorithm>
+ #include <atomic>
+ 
+@@ -453,6 +456,19 @@ AudioContext* AudioContext::Create(ExecutionContext* context,
+   if (context_options->hasSampleRate()) {
+     sample_rate = context_options->sampleRate();
+   }
++  // veilbrowser: desktop Windows/macOS Chrome runs the audio device at
++  // 48 kHz; a Linux host defaulting to 44.1 kHz leaks the real OS.
++  if (!sample_rate.has_value()) {
++    const base::CommandLine* command_line =
++        base::CommandLine::ForCurrentProcess();
++    if (command_line->HasSwitch("fingerprint")) {
++      std::string platform = base::ToLowerASCII(
++          command_line->GetSwitchValueASCII("fingerprint-platform"));
++      if (platform == "windows" || platform == "macos") {
++        sample_rate = 48000.0f;
++      }
++    }
++  }
+ 
+   std::optional<uint32_t> render_quantum_frames = 128;
+   if (RuntimeEnabledFeatures::WebAudioConfigurableRenderQuantumEnabled(

@@ -37,6 +37,13 @@ def test_kernel_screen_cpp_spoof_and_real_expose(make_browser):
     sm = screen_metrics(profile)
     b = make_browser(profile)
     page = b.new_page("about:blank")
+    # The first metrics update races the first evaluate; outerWidth (and
+    # with it screen.__width) is 0 until the window size lands.
+    import time
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and page.evaluate(
+            "window.outerWidth") == 0:
+        time.sleep(0.1)
     r = page.evaluate(SCREEN_JS)
     # C++ spoofing active: matches the profile-derived switch values exactly
     assert (r["width"], r["height"]) == (sm["w"], sm["h"])

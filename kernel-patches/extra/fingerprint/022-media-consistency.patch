@@ -1,0 +1,112 @@
+diff --git a/third_party/blink/renderer/core/css/media_values.cc b/third_party/blink/renderer/core/css/media_values.cc
+index 0d60244..0f18039 100644
+--- a/third_party/blink/renderer/core/css/media_values.cc
++++ b/third_party/blink/renderer/core/css/media_values.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "third_party/blink/renderer/core/css/media_values.h"
+ 
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "third_party/blink/public/common/css/scripting.h"
+ #include "third_party/blink/renderer/core/css/css_resolution_units.h"
+ #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
+@@ -171,6 +174,16 @@ int MediaValues::CalculateDeviceWidth(LocalFrame* frame) {
+     device_width = static_cast<int>(
+         lroundf(device_width * screen_info.device_scale_factor));
+   }
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint) &&
++      command_line->HasSwitch(switches::kFingerprintScreenWidth)) {
++    int parsed = 0;
++    if (base::StringToInt(
++            command_line->GetSwitchValueASCII(switches::kFingerprintScreenWidth),
++            &parsed) && parsed > 0) {
++      return parsed;
++    }
++  }
+   return device_width;
+ }
+ 
+@@ -183,6 +196,16 @@ int MediaValues::CalculateDeviceHeight(LocalFrame* frame) {
+     device_height = static_cast<int>(
+         lroundf(device_height * screen_info.device_scale_factor));
+   }
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint) &&
++      command_line->HasSwitch(switches::kFingerprintScreenHeight)) {
++    int parsed = 0;
++    if (base::StringToInt(
++            command_line->GetSwitchValueASCII(switches::kFingerprintScreenHeight),
++            &parsed) && parsed > 0) {
++      return parsed;
++    }
++  }
+   return device_height;
+ }
+ 
+@@ -193,6 +216,17 @@ bool MediaValues::CalculateStrictMode(LocalFrame* frame) {
+ }
+ 
+ float MediaValues::CalculateDevicePixelRatio(LocalFrame* frame) {
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint) &&
++      command_line->HasSwitch(switches::kFingerprintDeviceScaleFactor)) {
++    double parsed = 0;
++    if (base::StringToDouble(
++            command_line->GetSwitchValueASCII(
++                switches::kFingerprintDeviceScaleFactor),
++            &parsed) && parsed > 0) {
++      return parsed;
++    }
++  }
+   return frame->DevicePixelRatio();
+ }
+ 
+@@ -351,12 +385,23 @@ bool MediaValues::CalculateThreeDEnabled(LocalFrame* frame) {
+ 
+ mojom::blink::PointerType MediaValues::CalculatePrimaryPointerType(
+     LocalFrame* frame) {
++  // veilbrowser: headless advertises no pointer at all; a real desktop
++  // session always has a fine pointer. Keeping (pointer: fine) consistent
++  // with the spoofed platform closes the matchMedia tell.
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint)) {
++    return mojom::blink::PointerType::kPointerFineType;
++  }
+   DCHECK(frame);
+   DCHECK(frame->GetSettings());
+   return frame->GetSettings()->GetPrimaryPointerType();
+ }
+ 
+ int MediaValues::CalculateAvailablePointerTypes(LocalFrame* frame) {
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint)) {
++    return static_cast<int>(mojom::blink::PointerType::kPointerFineType);
++  }
+   DCHECK(frame);
+   DCHECK(frame->GetSettings());
+   return frame->GetSettings()->GetAvailablePointerTypes();
+@@ -364,6 +409,10 @@ int MediaValues::CalculateAvailablePointerTypes(LocalFrame* frame) {
+ 
+ mojom::blink::HoverType MediaValues::CalculatePrimaryHoverType(
+     LocalFrame* frame) {
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint)) {
++    return mojom::blink::HoverType::kHoverHoverType;
++  }
+   DCHECK(frame);
+   DCHECK(frame->GetSettings());
+   return frame->GetSettings()->GetPrimaryHoverType();
+@@ -377,6 +426,10 @@ MediaValues::CalculateOutputDeviceUpdateAbilityType(LocalFrame* frame) {
+ }
+ 
+ int MediaValues::CalculateAvailableHoverTypes(LocalFrame* frame) {
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint)) {
++    return static_cast<int>(mojom::blink::HoverType::kHoverHoverType);
++  }
+   DCHECK(frame);
+   DCHECK(frame->GetSettings());
+   return frame->GetSettings()->GetAvailableHoverTypes();

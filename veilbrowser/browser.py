@@ -1,11 +1,11 @@
 """Launch a fingerprint browser kernel with a FingerprintProfile, CloakBrowser-style.
 
-Injection strategies: "js" injects our own fingerprint bundle into any kernel
-via CDP (default — survives kernel upgrades on vanilla ungoogled-chromium),
-"kernel" uses fingerprint-chromium's C++ patches, "both" stacks them, and
-"native" runs the bundle that is compiled INTO the veil kernel
-(kernel-patches/extra/veil) — zero external injection, parameters delivered
-through the VEIL_PARAMS environment variable.
+Engines: "kernel" (default) is the pure C++ engine — the veil-chromium kernel
+implements every fingerprint surface natively (Blink patches + embedded metric
+fonts) and is driven purely by launch switches; no JS is injected anywhere.
+"js" injects our fingerprint bundle into any kernel via CDP (legacy), and
+"both" stacks it on top of the kernel patches (legacy, maximum parity).
+"native" is kept as an alias of "kernel".
 """
 
 from __future__ import annotations
@@ -164,11 +164,10 @@ class Browser:
     devtools: DevTools
     user_data_dir: str
     proxy_arg: str | None = None
-    engine: str = "kernel"          # js | kernel | both | native
+    engine: str = "kernel"          # js | kernel | both (native = kernel alias)
     kernel_version: str | None = None
     js_params: dict | None = None
-    veil_params: dict | None = None   # native engine: params handed via env
-    native_active: bool | None = None  # native engine: bundle confirmed running
+    kernel_active: bool | None = None  # kernel engine: spoofing confirmed running
     proxy_check: dict | None = None   # async exit-IP self-check result
     _forwarder: LocalForwarder | None = None
     _cleanup_dir: bool = False
@@ -307,26 +306,28 @@ def _verify_proxy_async(b: "Browser", expected_ip: str) -> None:
     threading.Thread(target=run, daemon=True, name="veil-proxy-check").start()
 
 
-def _verify_native_async(b: "Browser") -> None:
-    """Confirm the compiled-in bundle actually runs (an unpatched kernel
-    silently ignores VEIL_PARAMS — surface that as native_active=False)."""
+def _verify_kernel_async(b: "Browser") -> None:
+    """Confirm the kernel's C++ spoofing is actually live (an unpatched
+    kernel ignores the --fingerprint switches — surface that)."""
     def run() -> None:
         try:
             page = b.devtools.new_page_cdp("about:blank")
             try:
-                b.native_active = bool(
-                    page.evaluate("typeof veilNativeCfg === 'function'"))
+                b.kernel_active = bool(page.evaluate(
+                    "matchMedia('(pointer: fine)').matches && "
+                    "matchMedia('(hover: hover)').matches && "
+                    "navigator.plugins.length > 0"))
             finally:
                 _close_session_page(b, page)
         except Exception:
-            b.native_active = False
+            b.kernel_active = False
 
-    threading.Thread(target=run, daemon=True, name="veil-native-check").start()
+    threading.Thread(target=run, daemon=True, name="veil-kernel-check").start()
 
 
 def launch(profile: FingerprintProfile | None = None,
            *,
-           engine: str = "js",
+           engine: str = "kernel",
            headless: bool = True,
            binary: str | None = None,
            user_data_dir: str | None = None,
@@ -337,13 +338,14 @@ def launch(profile: FingerprintProfile | None = None,
     """Start the browser. Blocks until the DevTools endpoint is up.
 
     engine selects where the fingerprint lives:
-      * "js"     — our injected bundle on any kernel (default; kernel-upgrade
-                   proof, works on vanilla ungoogled-chromium)
-      * "kernel" — fingerprint-chromium's C++ patches
-      * "both"   — kernel patches + our bundle on top
-      * "native" — the bundle compiled into the veil kernel; no CDP, no
-                   injection — requires a binary built with
-                   kernel-patches/extra/veil (scripts/build-kernel.sh)
+      * "kernel" — pure C++ engine (default): the veil kernel implements every
+                   fingerprint surface natively and is driven purely by launch
+                   switches; nothing is injected at runtime. Requires a binary
+                   built with kernel-patches/ (scripts/build-kernel.sh).
+      * "js"     — our injected bundle on any kernel (legacy; works on vanilla
+                   ungoogled-chromium)
+      * "both"   — kernel patches + our bundle on top (legacy, max parity)
+      * "native" — deprecated alias of "kernel"
 
     With engine="kernel", ``js_overlay=True`` additionally injects the JS
     bundle's canvas section only — fingerprint-chromium leaves pure-text
@@ -353,13 +355,12 @@ def launch(profile: FingerprintProfile | None = None,
     A proxy with credentials on the profile is transparently wrapped in a
     local authenticated forwarder (--proxy-server cannot auth).
     """
-    if engine not in ("js", "kernel", "both", "native"):
+    if engine == "native":  # v0.8 alias — the pure C++ kernel replaced it
+        engine = "kernel"
+    if engine not in ("js", "kernel", "both"):
         raise ValueError(f"unknown engine: {engine!r}")
-    if engine == "native" and js_overlay:
-        raise ValueError("engine='native' has nothing to overlay: the bundle "
-                         "is compiled into the kernel")
     profile = profile or FingerprintProfile(seed=0)
-    kernel_fp = engine in ("kernel", "both", "native")
+    kernel_fp = engine in ("kernel", "both")
     binary = binary or default_binary(vanilla=engine == "js")
     if not binary:
         raise RuntimeError(
@@ -393,29 +394,17 @@ def launch(profile: FingerprintProfile | None = None,
             js_params["spoof"] = {k: False for k in js_params["spoof"]}
             js_params["spoof"]["canvas"] = True
 
-    veil_params: dict | None = None
-    if engine == "native":
-        # The kernel's compiled-in bundle reads its parameters from the
-        # VEIL_PARAMS environment variable; metric-clone fonts are baked into
-        # the binary, so they are stripped from the payload.
-        from .inject import js_params as make_js_params
-        mver = re.search(r"(\d+\.\d+\.\d+\.\d+)", binary)
-        chrome_full = profile.brand_version or (mver.group(1) if mver else None)
-        if chrome_full is None:
-            try:  # the kernel's own version keeps the UA stories consistent
-                out = subprocess.run([binary, "--version"], capture_output=True,
-                                     text=True, timeout=15).stdout or ""
-                vm = re.search(r"(\d+\.\d+\.\d+\.\d+)", out)
-                chrome_full = vm.group(1) if vm else None
-            except Exception:
-                chrome_full = None
-        veil_params = make_js_params(profile, chrome_full)
-        veil_params.pop("fontData", None)
-
     flags = [f"--user-data-dir={udd}",
              "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
              "--disable-sync", "--disable-features=Translate"]
     flags += profile.fingerprint_flags(kernel_fp=kernel_fp)
+    if kernel_fp:
+        # Keep the device-pixel-ratio story coherent across
+        # window.devicePixelRatio and the media queries (macos = 2).
+        from .inject import screen_metrics
+        sm = screen_metrics(profile)
+        if sm.get("dpr") and sm["dpr"] != 1:
+            flags.append(f"--fingerprint-device-scale-factor={sm['dpr']}")
     if js_params and engine != "kernel":
         # Process-wide HTTP User-Agent: CDP's setUserAgentOverride only covers
         # the attached page session, so worker/subframe fetches would otherwise
@@ -449,15 +438,9 @@ def launch(profile: FingerprintProfile | None = None,
             proxy_arg = f"{up.scheme}://{up.host}:{up.port}"
         flags.append(f"--proxy-server={proxy_arg}")
 
-    env: dict | None = None
-    if veil_params is not None:
-        import json as _json
-        env = dict(os.environ)
-        env["VEIL_PARAMS"] = _json.dumps(veil_params, separators=(",", ":"),
-                                         sort_keys=True)
     proc = subprocess.Popen([binary] + flags,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            text=True, env=env)
+                            text=True)
 
     ws_url_holder: list[str] = []
     stderr_lines: list[str] = []
@@ -501,10 +484,9 @@ def launch(profile: FingerprintProfile | None = None,
                 devtools=devtools,
                 user_data_dir=flags[0].split("=", 1)[1],
                 proxy_arg=proxy_arg,
-                engine=engine, kernel_version=kernel_version, js_params=js_params,
-                veil_params=veil_params)
-    if engine == "native":
-        _verify_native_async(b)
+                engine=engine, kernel_version=kernel_version, js_params=js_params)
+    if engine == "kernel":
+        _verify_kernel_async(b)
     if profile.proxy and profile.webrtc_ip:
         _verify_proxy_async(b, profile.webrtc_ip)
     if js_params:
