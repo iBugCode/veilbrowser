@@ -64,10 +64,12 @@ python3 ugc/utils/domain_substitution.py apply \
     -r "$PATCHES_DIR/domain_regex.list" \
     -f "$PATCHES_DIR/domain_substitution.list" src
 
-# ---- 3. the fingerprint patch set (kernel-patches/series, extra/ entries) ---
-# The series file mixes historical core/ lines (applied via ugc/patches above)
-# with our extra/fingerprint/ set; patches.py wants a dir-local series.
-grep '^extra/' "$PATCHES_DIR/series" | sed 's|^extra/||' > "$PATCHES_DIR/extra/series"
+# ---- 3. the fingerprint patch set (kernel-patches/series) -------------------
+# The series file is a full manifest: core/ + extra/{inox,iridium,...} lines
+# belong to ungoogled's own patch tree (applied above via ugc/patches); only
+# the extra/fingerprint/ entries are ours. patches.py wants a dir-local series.
+grep '^extra/fingerprint/' "$PATCHES_DIR/series" | sed 's|^extra/||' \
+    > "$PATCHES_DIR/extra/series"
 python3 ugc/utils/patches.py apply src "$PATCHES_DIR/extra"
 # 022-030 are the pure-C++ engine patches. Regenerate after editing the build
 # tree:  python3 scripts/gen_kernel_patches.py --tree src

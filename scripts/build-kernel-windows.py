@@ -80,13 +80,18 @@ def _run_build_process(*args):
 
 
 def _write_extra_series(kernel_patches: Path) -> Path:
-    """Derives kernel-patches/extra/series from the fingerprint series file."""
+    """Derives kernel-patches/extra/series from the fingerprint series file.
+
+    Only extra/fingerprint/ entries are ours; the other extra/ lines
+    (inox-patchset, iridium-browser, ...) belong to ungoogled's own patch
+    tree and are already applied with ugc/patches.
+    """
     extra_dir = kernel_patches / 'extra'
     series = extra_dir / 'series'
     if not series.exists():
         lines = [ln[len('extra/'):] for ln in
                  (kernel_patches / 'series').read_text(encoding='utf-8').splitlines()
-                 if ln.startswith('extra/')]
+                 if ln.startswith('extra/fingerprint/')]
         series.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return extra_dir
 
