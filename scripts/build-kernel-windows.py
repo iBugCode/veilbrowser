@@ -266,7 +266,10 @@ def main():
     HOST_CPU_IS_64BIT = sys.maxsize > 2**32
     RUST_DIR_DST = source_tree / 'third_party' / 'rust-toolchain'
     RUST_FLAG_FILE = RUST_DIR_DST / 'INSTALLED_VERSION'
-    if not RUST_FLAG_FILE.exists():
+    # The FULL tarball ships placeholder files under third_party/rust-toolchain
+    # (including INSTALLED_VERSION), so test for the actual compiler, not the
+    # marker file — upstream's check silently skipped the copy on full trees.
+    if not (RUST_DIR_DST / 'bin' / 'rustc.exe').exists():
         for rust_dir_src in ('rust-toolchain-x64', 'rust-toolchain-x86', 'rust-toolchain-arm'):
             src_dir = source_tree / 'third_party' / rust_dir_src
             for dir_to_copy in ('bin', 'lib'):
