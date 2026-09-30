@@ -16,17 +16,18 @@ from .browser import Browser, IdentityMismatch, default_binary, launch, start
 from .cdp import CDP, CDPError, DevTools
 from .geo import align_profile, locale_for_country, query_geo
 from .inject import build_script, install, js_params
-from .profile import FingerprintProfile, PRESETS, from_preset
+from .profile import FingerprintProfile, PRESETS, from_preset, resolve_fingerprint
 from .humanize import HumanInput
 from .probe import check, check_exit_ip, collect, print_report
 from .upgrade import latest_release, upgrade as upgrade_kernel
 
-__version__ = "0.9.1"
+__version__ = "0.10.0"
 
 __all__ = [
     "Browser", "CDP", "CDPError", "DevTools", "FingerprintProfile", "PRESETS",
     "IdentityMismatch", "launch", "start", "default_binary", "HumanInput",
-    "from_preset", "collect", "check", "check_exit_ip", "print_report",
+    "from_preset", "resolve_fingerprint", "collect", "check", "check_exit_ip",
+    "print_report",
     "js_params", "build_script", "install", "latest_release", "upgrade_kernel",
     "align_profile", "locale_for_country", "query_geo",
     "__version__",

@@ -1,30 +1,130 @@
-# Self-hosted only: applying the fingerprint patch set requires a full
-# Chromium checkout (~100 GB disk, ~100 min on 8 cores). GitHub-hosted
-# runners have ~14 GB of disk and cannot build the kernel; run this
-# workflow on your own machine instead:
+# Builds the patched "veil-chromium" kernel as downloadable executables on
+# GitHub-hosted runners: linux-x64 (ubuntu-latest) and win-x64
+# (windows-2025). Both are 4-core / 6-hour jobs, so the CI builds use
+# symbol_level=0 (already in the flags), no PGO, and ThinLTO disabled
+# (VEIL_THINLTO=0) — functionally identical, slightly less optimized than
+# the ThinLTO release-grade kernels from a beefy box:
 #
-#   git clone https://github.com/iBugCode/veilbrowser && cd veilbrowser
-#   # register the runner, then dispatch this workflow — or simply run:
-#   bash scripts/build-kernel.sh dist/
+#   bash scripts/build-kernel.sh dist/          # linux, ThinLTO
 #
-# The produced binary is NOT committed back — this repo ships patches only.
+# A v* tag attaches the kernel archives to the GitHub release next to the
+# Python wheel. Dispatch runs upload artifacts only.
 
-name: kernel (self-hosted)
+name: kernel
 
 on:
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Platforms to build: both | linux | windows'
+        default: both
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-kernel:
-    runs-on: [self-hosted, linux, x64]
-    timeout-minutes: 300
+  linux:
+    if: github.event_name == 'push' ||
+        inputs.platforms == 'both' || inputs.platforms == 'linux'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
-      - name: Build patched veil-chromium
+      - name: Free disk space (Chromium needs ~50 GB)
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghc /usr/share/swift /usr/local/share/boost \
+            /usr/lib/jvm /opt/hostedtoolcache/Code.Server || true
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h /
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            patch ninja-build gperf golang-go clang-format bzip2 xz-utils
+          # devtools-frontend needs a modern node; noble's apt node is too old
+          curl -sSL -o /tmp/node.tar.xz \
+            https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz
+          sudo mkdir -p /usr/local/node
+          sudo tar xf /tmp/node.tar.xz -C /usr/local/node --strip-components=1
+          echo /usr/local/node/bin >> "$GITHUB_PATH"
+          sudo /usr/local/node/bin/npm install -g esbuild
+      - name: Build kernel (linux-x64)
+        env:
+          VEIL_THINLTO: '0'
         run: bash scripts/build-kernel.sh dist/
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: veil-chromium-${{ github.sha }}
-          path: dist/veil-chromium-*.tar.zst
+          name: kernel-linux-x64
+          path: dist/veil-chromium-*-linux-x64.tar.zst
           if-no-files-found: error
+
+  windows:
+    if: github.event_name == 'push' ||
+        inputs.platforms == 'both' || inputs.platforms == 'windows'
+    runs-on: windows-2025
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Enable long paths (Chromium sources exceed MAX_PATH)
+        run: |
+          git config --system core.longpaths true
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            /v LongPathsEnabled /t REG_DWORD /d 1 /f
+      - name: Fetch ungoogled-chromium-windows at the pinned tag
+        run: |
+          git clone --depth 1 --branch 153.0.8010.52-1.1 `
+            --recurse-submodules --shallow-submodules `
+            https://github.com/ungoogled-software/ungoogled-chromium-windows `
+            ..\ungoogled-chromium-windows
+      - name: Python deps
+        run: pip install httplib2==0.22.0
+      - name: Build kernel (win-x64)
+        env:
+          VEIL_GN_EXTRA: 'use_thin_lto=false'
+        run: >
+          python scripts/build-kernel-windows.py
+          --ugc-win ..\ungoogled-chromium-windows
+          --kernel-patches kernel-patches
+          --out dist
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-win-x64
+          path: dist/veil-chromium-*-win-x64.zip
+          if-no-files-found: error
+
+  release:
+    if: >-
+      always() && startsWith(github.ref, 'refs/tags/') &&
+      needs.linux.result == 'success'
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kernel-*
+          merge-multiple: true
+          path: dist/
+      - name: Attach kernels to the release (waits for the wheel release job)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          for i in $(seq 1 20); do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" dist/veil-chromium-* --clobber && exit 0
+            fi
+            sleep 30
+          done
+          gh release create "$TAG" dist/veil-chromium-* --generate-notes

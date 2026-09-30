@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from .browser import default_binary, launch
-from .profile import PRESETS, FingerprintProfile, from_preset
+from .profile import PRESETS, FingerprintProfile, from_preset, resolve_fingerprint
 
 
 def _add_engine_args(p: argparse.ArgumentParser) -> None:
@@ -21,6 +21,10 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
 
 
 def _add_profile_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--fingerprint", metavar="SEED|FILE",
+                   help="fingerprint to reuse: a number means the seed "
+                        "(e.g. --fingerprint=42), anything else is a saved "
+                        "profile JSON (e.g. --fingerprint=myprofile.json)")
     p.add_argument("--seed", type=int, default=None, help="fingerprint seed (32-bit int)")
     p.add_argument("--preset", choices=sorted(PRESETS), default=None,
                    help="coherent persona preset (seed still drives the rest)")
@@ -35,7 +39,12 @@ def _add_profile_args(p: argparse.ArgumentParser) -> None:
 
 
 def _profile_from_args(args: argparse.Namespace) -> FingerprintProfile:
-    if getattr(args, "profile_file", None):
+    if getattr(args, "fingerprint", None):
+        try:
+            prof = resolve_fingerprint(args.fingerprint)
+        except ValueError as exc:
+            sys.exit(f"--fingerprint: {exc}")
+    elif getattr(args, "profile_file", None):
         prof = FingerprintProfile.load(args.profile_file)
     elif args.preset:
         if args.seed is None:
@@ -165,6 +174,11 @@ def main(argv: list[str] | None = None) -> int:
     _add_profile_args(p_save)
     p_save.add_argument("out", help="output JSON path")
     p_save.set_defaults(func=cmd_profile_save)
+
+    p_fsave = sub.add_parser("fingerprint-save", help="alias of profile-save")
+    _add_profile_args(p_fsave)
+    p_fsave.add_argument("out", help="output JSON path")
+    p_fsave.set_defaults(func=cmd_profile_save)
 
     p_up = sub.add_parser("upgrade",
                           help="pull the newest community ungoogled-chromium kernel")

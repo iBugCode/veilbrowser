@@ -104,7 +104,10 @@ components are used** — no proprietary code is included or derived (see
   `veilbrowser launch --rebind`) replaces it deliberately.
 - **Saved profiles**: `profile.save(path)` / `FingerprintProfile.load(path)`
   (and `veilbrowser profile-save`) — same file + same seed reproduces the
-  same fingerprint for session reuse weeks later.
+  same fingerprint for session reuse weeks later. One argument covers both
+  forms: `--fingerprint=42` reuses seed 42, `--fingerprint=myprofile.json`
+  reloads a saved identity (`veilbrowser fingerprint-save` writes one;
+  `launch(fingerprint=...)` in the API).
 - **Proxy exit-IP self-check**: after launch with a proxy, the browser
   fetches its public IP through its own network stack and compares it with
   the externally measured proxy exit — catching the silent direct-connection
@@ -162,8 +165,9 @@ components are used** — no proprietary code is included or derived (see
 
 ## Platform support
 
-**Linux x86_64 only** for now (the kernels and the build pipeline are
-Linux-first). macOS and Windows kernels/packaging are on the roadmap —
+The wrapper is cross-platform (Python). Kernel packages: **linux-x64** is
+battle-tested; **win-x64** is built automatically on every release by CI
+(newer, less real-world mileage); macOS is on the roadmap —
 see [Roadmap](#roadmap-unfinished-work).
 
 ## Quick start
@@ -205,8 +209,8 @@ with launch(profile, headless=True) as browser:        # engine="kernel" default
 Persistence — reuse an identity across sessions:
 
 ```bash
-veilbrowser profile-save --preset windows-us-office --seed 42 myprofile.json
-veilbrowser check --profile-file myprofile.json
+veilbrowser fingerprint-save --preset windows-us-office --seed 42 myprofile.json
+veilbrowser check --fingerprint myprofile.json   # or --fingerprint 42 for the bare seed
 ```
 
 With a proxy configured, the WebRTC IP policy is preset to
@@ -346,19 +350,31 @@ BroTector finding.
 
 ## Building the kernel
 
+**Prebuilt kernels ship on every release.** A `v*` tag triggers GitHub
+Actions builds of the patched kernel for **linux-x64** (`veil-chromium-*-linux-x64.tar.zst`)
+and **win-x64** (`veil-chromium-*-win-x64.zip`) on hosted runners —
+`symbol_level=0`, no PGO, no ThinLTO to fit the 4-core/6-hour CI limits.
+The thin self-hosted build below stays the release-grade path.
+
 This repository ships **patches only** — no Chromium sources or binaries
 are committed. To build the patched kernel yourself:
 
 ```bash
-bash scripts/build-kernel.sh dist/        # ~100 GB disk, ~100 min on 8 cores
+bash scripts/build-kernel.sh dist/        # ~100 GB disk, ~100 min on 8 cores (ThinLTO)
+VEIL_THINLTO=0 bash scripts/build-kernel.sh dist/   # faster, CI-grade
 ```
 
-Or run the `kernel (self-hosted)` GitHub Actions workflow on your own
-runner (hosted runners don't have the disk). The script downloads
-ungoogled-chromium, prunes it, applies upstream + fingerprint patches,
-substitutes domains, and produces a `veil-chromium-*.tar.zst` kernel
-tarball. Patches 022–026 are generated from a build tree
-(`scripts/gen_kernel_patches.py`); 028–030 are maintained by hand.
+Windows x64: clone
+[ungoogled-chromium-windows](https://github.com/ungoogled-software/ungoogled-chromium-windows)
+at the tag matching the Chromium version and drive it with
+`scripts/build-kernel-windows.py` (see the script header; same flow the
+`kernel` GitHub Actions workflow runs).
+
+The script downloads the hash-verified chromium-lite tarball, prunes it,
+applies upstream + fingerprint patches, substitutes domains, bootstraps the
+pinned clang/rust/gn toolchain (no depot_tools), and produces a
+`veil-chromium-*.tar.zst` kernel tarball. Patches 022–026 are generated from
+a build tree (`scripts/gen_kernel_patches.py`); 028–030 are maintained by hand.
 
 ## Roadmap (unfinished work)
 
@@ -374,7 +390,8 @@ tarball. Patches 022–026 are generated from a build tree
   deeper C++ work.
 - **Android profiles** (CloakBrowser #533-style request): needs kernel
   platform switches plus mobile GPU/screen pools.
-- **macOS / Windows support** (currently Linux x86_64 only).
+- **macOS support** (linux-x64 and win-x64 kernels now ship from CI; the
+  win-x64 kernel is new and less battle-tested than the Linux one).
 - **Ecosystem**: Playwright/Puppeteer drop-in API, multi-language client
   UI, Docker/remote-CDP service mode, profile-management GUI.
 

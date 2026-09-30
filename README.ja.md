@@ -98,9 +98,12 @@ WebGL 上限。ページで動くのはブラウザ自身のコードだけで�
   `IdentityMismatch` を送出します。意図的に置き換える場合は
   `rebind=True`（または `veilbrowser launch --rebind`）。
 - **プロファイル永続化**：`profile.save(path)` /
-  `FingerprintProfile.load(path)`（および `veilbrowser profile-save`）
+  `FingerprintProfile.load(path)`（および `veilbrowser fingerprint-save`）
   ——同一ファイル + 同一シードなら数週間後でも同一指紋を再現（Camoufox
-  #38/#442、CloakBrowser #320 と同種のニーズ）。
+  #38/#442、CloakBrowser #320 と同種のニーズ）。1 つの引数で両形式を
+  サポート：`--fingerprint=42` はシード 42 を再利用、
+  `--fingerprint=myprofile.json` は保存済みアイデンティティを再読み込み
+  （API では `launch(fingerprint=...)`）。
 - **プロキシ退出 IP セルフチェック**：プロキシ設定時に起動後、ブラウザ
   自身のネットワーク スタック経由で公開 IP を取得し、外部実測のプロキシ
   退出 IP と比較——認証付き SOCKS5 で起きる「サイレント直結フォール
@@ -147,8 +150,9 @@ WebGL 上限。ページで動くのはブラウザ自身のコードだけで�
 
 ## プラットフォーム対応
 
-現在は **Linux x86_64 のみ**です（カーネルとビルドパイプラインは
-Linux ファースト）。macOS / Windows 対応はロードマップ上にあります——
+wrapper 層はクロスプラットフォーム（Python）。カーネル パッケージ：
+**linux-x64** は実績十分、**win-x64** は CI が release に自動添付
+（比較的新しく、Linux ほど実戦検証は進んでいません）、macOS はロードマップ上——
 [ロードマップ（未完了の作業）](#ロードマップ未完了の作業)を参照。
 
 ## クイックスタート
@@ -191,8 +195,8 @@ with launch(profile, headless=True) as browser:   # 既定 engine="kernel"
 永続化——同一アイデンティティをセッション間で再利用：
 
 ```bash
-veilbrowser profile-save --preset windows-us-office --seed 42 myprofile.json
-veilbrowser check --profile-file myprofile.json
+veilbrowser fingerprint-save --preset windows-us-office --seed 42 myprofile.json
+veilbrowser check --fingerprint myprofile.json   # または --fingerprint 42 でシード直接
 ```
 
 プロキシ設定時は WebRTC IP ポリシーが `disable_non_proxied_udp` に
@@ -228,7 +232,7 @@ veilbrowser.launch(profile, user_data_dir="/srv/profiles/acct-42", rebind=True)
 veilbrowser check   --seed 1001 --platform macos --timezone Asia/Tokyo  # セルフチェック
 veilbrowser check   --vanilla --engine js --quiet                       # JSON 出力
 veilbrowser launch  --preset windows-cn-office --seed 42                # ブラウザ起動
-veilbrowser profile-save --preset windows-us-office --seed 42 out.json  # プロファイル保存
+veilbrowser fingerprint-save --preset windows-us-office --seed 42 out.json  # プロファイル保存
 veilbrowser profiles                                                    # プリセット一覧
 veilbrowser upgrade [--check] [--version X.Y.Z.W] [--dest DIR]          # カーネル更新
 veilbrowser path                                                        # カーネル パス
@@ -321,17 +325,31 @@ TLS ja3 E2E、humanize isTrusted E2E、console getter 静寂、BroTector
 
 ## カーネルのビルド
 
+**リリースごとにプリビルド カーネルが自動添付されます。**`v*` タグで
+GitHub Actions がホステッド ランナー上で **linux-x64**
+（`veil-chromium-*-linux-x64.tar.zst`）と **win-x64**
+（`veil-chromium-*-win-x64.zip`）のカーネルをビルドします——4 コア/6 時間
+の CI 制限に収めるため `symbol_level=0`・PGO なし・ThinLTO オフ。
+下記のローカル ThinLTO ビルドがリリース グレードのパスです。
+
 このリポジトリは**パッチのみ**をバージョン管理します——Chromium の
 ソースやバイナリはコミットしていません。自分でビルドするには：
 
 ```bash
-bash scripts/build-kernel.sh dist/        # 約 100 GB ディスク、8 コアで約 100 分
+bash scripts/build-kernel.sh dist/        # 約 100 GB ディスク、8 コアで約 100 分（ThinLTO）
+VEIL_THINLTO=0 bash scripts/build-kernel.sh dist/   # 高速、CI グレード
 ```
 
-または自前ランナーで `kernel (self-hosted)` GitHub Actions ワークフローを
-実行（ホステッド ランナーはディスクが足りません）。スクリプトは
-ungoogled-chromium をダウンロードし、prune、上流 + 指紋パッチ適用、
-ドメイン置換を行い、`veil-chromium-*.tar.zst` カーネル tarball を生成します。
+Windows x64：Chromium バージョンに一致するタグで
+[ungoogled-chromium-windows](https://github.com/ungoogled-software/ungoogled-chromium-windows)
+をクローンし、`scripts/build-kernel-windows.py` でドライブします
+（スクリプト先頭の説明を参照。`kernel` GitHub Actions ワークフローと
+同じ流れです）。
+
+スクリプトはハッシュ検証済みの chromium-lite tarball をダウンロードし、
+prune、上流 + 指紋パッチ適用、ドメイン置換、ピン留めツールチェーン
+（clang/rust/gn、depot_tools 不要）のブートストラップを行い、
+`veil-chromium-*.tar.zst` カーネル tarball を生成します。
 `022-030` が純 C++ エンジン パッチです：メディアクエリ/画面整合、
 埋め込みメトリック フォント、デスクトップ環境（voices/mediaDevices/quota/
 サンプルレート）、WebGL 上限、window.devicePixelRatio、
@@ -356,7 +374,8 @@ navigator.connection 品質、getBBox 整合、Bluetooth 可用性。022–026 �
   レイアウトが必要。
 - **Android プロファイル**（CloakBrowser #533 と同種の要望）：カーネルの
   プラットフォーム スイッチとモバイル向け GPU/画面プールの組込みが必要。
-- **macOS / Windows 対応**（現状は Linux x86_64 のみ）。
+- **macOS 対応**（CI が linux-x64 と win-x64 のカーネルを release に
+  自動添付済み。win-x64 は新しめで、Linux より実戦検証が少ない）。
 - **エコシステム**：Playwright/Puppeteer ドロップイン API、多言語クライアント
   UI、Docker/リモート CDP サービス モード、プロファイル管理 GUI。
 

@@ -7,6 +7,7 @@ from veilbrowser.profile import (
     FingerprintProfile,
     PRESETS,
     from_preset,
+    resolve_fingerprint,
 )
 from veilbrowser.proxy import LocalForwarder, UpstreamProxy, parse_proxy_url
 
@@ -82,6 +83,90 @@ class TestPresets:
     def test_unknown_preset_raises(self):
         with pytest.raises(KeyError):
             from_preset("no-such-preset", seed=1)
+
+
+class TestResolveFingerprint:
+    def test_int_and_numeric_string_mean_seed(self):
+        assert resolve_fingerprint(42).seed == 42
+        assert resolve_fingerprint("42").seed == 42
+        assert resolve_fingerprint(-7).seed == -7
+
+    def test_saved_file_round_trip(self, tmp_path):
+        f = tmp_path / "fp.json"
+        FingerprintProfile(seed=42, platform="macos",
+                           language="ja-JP").save(str(f))
+        p = resolve_fingerprint(str(f))
+        assert (p.seed, p.platform, p.language) == (42, "macos", "ja-JP")
+
+    def test_missing_file_raises_with_both_meanings(self, tmp_path):
+        with pytest.raises(ValueError, match="seed number nor"):
+            resolve_fingerprint(str(tmp_path / "nope.json"))
+
+    def test_rejects_non_numeric_gibberish(self):
+        with pytest.raises(ValueError, match="neither"):
+            resolve_fingerprint("hello world")
+
+
+class TestFingerprintCLI:
+    """--fingerprint wiring: seed | file, plus the fingerprint-save alias."""
+
+    @staticmethod
+    def _args(**kw):
+        from veilbrowser.cli import _profile_from_args
+        ns = dict(fingerprint=None, profile_file=None, preset=None, seed=None,
+                  platform=None, timezone=None, language=None, brand=None,
+                  concurrency=None, proxy=None)
+        ns.update(kw)
+        import argparse
+        return _profile_from_args(argparse.Namespace(**ns))
+
+    def test_launch_fingerprint_number(self):
+        assert self._args(fingerprint="42").seed == 42
+
+    def test_launch_fingerprint_file_with_override(self, tmp_path):
+        f = tmp_path / "fp.json"
+        FingerprintProfile(seed=99, platform="linux").save(str(f))
+        p = self._args(fingerprint=str(f), timezone="Asia/Tokyo")
+        assert p.seed == 99 and p.platform == "linux"
+        assert p.timezone == "Asia/Tokyo"
+
+    def test_bad_fingerprint_exits_cleanly(self, tmp_path):
+        import argparse
+        from veilbrowser.cli import _profile_from_args
+        with pytest.raises(SystemExit, match="--fingerprint"):
+            _profile_from_args(argparse.Namespace(
+                fingerprint=str(tmp_path / "nope.json"), profile_file=None,
+                preset=None, seed=None, platform=None, timezone=None,
+                language=None, brand=None, concurrency=None, proxy=None))
+
+    def test_fingerprint_save_alias_writes_json(self, tmp_path, capsys):
+        from veilbrowser import cli
+        out = tmp_path / "alias.json"
+        assert cli.main(["fingerprint-save", "--seed", "5", str(out)]) == 0
+        import json
+        assert json.load(open(out))["seed"] == 5
+
+
+class TestLaunchFingerprintArg:
+    """launch(fingerprint=...) resolves before any kernel is needed."""
+
+    def test_rejects_profile_and_fingerprint_together(self, tmp_path):
+        from veilbrowser.browser import launch
+        with pytest.raises(ValueError, match="not both"):
+            launch(FingerprintProfile(seed=1), fingerprint=42)
+
+    def test_bad_fingerprint_fails_before_binary_lookup(self, tmp_path):
+        from veilbrowser.browser import launch
+        with pytest.raises(ValueError, match="seed number nor"):
+            launch(fingerprint=str(tmp_path / "nope.json"))
+
+    def test_valid_fingerprint_reaches_binary_check(self, monkeypatch):
+        import veilbrowser.browser as browser_mod
+        from veilbrowser.browser import launch
+        # hermetic: resolution succeeds, then the missing kernel stops launch
+        monkeypatch.setattr(browser_mod, "default_binary", lambda vanilla=False: None)
+        with pytest.raises(RuntimeError, match="binary not found"):
+            launch(fingerprint=42)
 
 
 class TestProxyParsing:

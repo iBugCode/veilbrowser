@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 
 from .cdp import CDP, DevTools
-from .profile import FingerprintProfile
+from .profile import FingerprintProfile, resolve_fingerprint
 from .proxy import LocalForwarder, UpstreamProxy, parse_proxy_url
 
 _DEVTOOLS_RE = re.compile(r"DevTools listening on (ws://\S+)")
@@ -386,6 +386,7 @@ def _verify_kernel_async(b: "Browser") -> None:
 
 def launch(profile: FingerprintProfile | None = None,
            *,
+           fingerprint: "int | str | os.PathLike[str] | None" = None,
            engine: str = "kernel",
            headless: bool = True,
            binary: str | None = None,
@@ -396,6 +397,11 @@ def launch(profile: FingerprintProfile | None = None,
            js_overlay: bool = False,
            rebind: bool = False) -> Browser:
     """Start the browser. Blocks until the DevTools endpoint is up.
+
+    ``profile`` takes a FingerprintProfile; alternatively pass
+    ``fingerprint=42`` (seed) or ``fingerprint="myprofile.json"`` (a saved
+    profile) and it is resolved for you — see
+    veilbrowser.resolve_fingerprint.
 
     engine selects where the fingerprint lives:
       * "kernel" — pure C++ engine (default): the veil kernel implements every
@@ -424,7 +430,11 @@ def launch(profile: FingerprintProfile | None = None,
         engine = "kernel"
     if engine not in ("js", "kernel", "both"):
         raise ValueError(f"unknown engine: {engine!r}")
-    profile = profile or FingerprintProfile(seed=0)
+    if profile is not None and fingerprint is not None:
+        raise ValueError("pass either profile= or fingerprint=, not both")
+    if profile is None:
+        profile = resolve_fingerprint(fingerprint) if fingerprint is not None \
+            else FingerprintProfile(seed=0)
     kernel_fp = engine in ("kernel", "both")
     binary = binary or default_binary(vanilla=engine == "js")
     if not binary:

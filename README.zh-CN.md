@@ -83,8 +83,11 @@ Windows 字体度量（度量兼容字体编译进二进制）、语音列表、
   `IdentityMismatch`，而不是让账号指纹悄悄漂移。确要换身份时传
   `rebind=True`（或 `veilbrowser launch --rebind`）显式覆盖。
 - **持久化档案**：`profile.save(path)` / `FingerprintProfile.load(path)`
-  （及 `veilbrowser profile-save`）——同一档案文件 + 同一 seed，数周后
+  （及 `veilbrowser fingerprint-save`）——同一档案文件 + 同一 seed，数周后
   复用仍是同一指纹（Camoufox #38/#442、CloakBrowser #320 同类需求）。
+  一个参数通吃两种形式：`--fingerprint=42` 复用种子 42，
+  `--fingerprint=myprofile.json` 重新加载已保存的身份（API 侧
+  `launch(fingerprint=...)` 同理）。
 - **代理出口 IP 自检**：配置代理启动后，浏览器走自身网络栈取公网 IP 并与
   外部实测的代理出口比对——抓出认证 SOCKS5 静默回退直连这类故障
   （CloakBrowser #157），结果在 `browser.proxy_check`。
@@ -129,8 +132,9 @@ Windows 字体度量（度量兼容字体编译进二进制）、语音列表、
 
 ## 平台支持
 
-目前**仅支持 Linux x86_64**（内核与编译管线以 Linux 为先）。
-macOS / Windows 支持在路线图中——见[路线图（未完成工作）](#路线图未完成工作)。
+wrapper 层跨平台（Python）。内核包：**linux-x64** 久经测试；**win-x64**
+由 CI 随 release 自动构建（较新，实战验证较少）；macOS 在路线图中——
+见[路线图（未完成工作）](#路线图未完成工作)。
 
 ## 快速开始
 
@@ -170,8 +174,8 @@ with launch(profile, engine="native", headless=True) as browser:
 持久化——跨会话复用同一身份：
 
 ```bash
-veilbrowser profile-save --preset windows-us-office --seed 42 myprofile.json
-veilbrowser check --profile-file myprofile.json
+veilbrowser fingerprint-save --preset windows-us-office --seed 42 myprofile.json
+veilbrowser check --fingerprint myprofile.json   # 或 --fingerprint 42 直接用种子
 ```
 
 配置了代理时自动把 WebRTC IP 策略预置为 `disable_non_proxied_udp`，
@@ -202,7 +206,7 @@ veilbrowser.launch(profile, user_data_dir="/srv/profiles/acct-42", rebind=True)
 veilbrowser check   --seed 1001 --platform macos --timezone Asia/Tokyo  # 自检报告
 veilbrowser check   --vanilla --engine js --quiet                       # JSON 输出
 veilbrowser launch  --preset windows-cn-office --seed 42                # 起浏览器
-veilbrowser profile-save --preset windows-us-office --seed 42 out.json  # 持久化档案
+veilbrowser fingerprint-save --preset windows-us-office --seed 42 out.json  # 持久化档案
 veilbrowser profiles                                                    # 档位列表
 veilbrowser upgrade [--check] [--version X.Y.Z.W] [--dest DIR]          # 升级内核
 veilbrowser path                                                        # 双内核路径
@@ -290,19 +294,31 @@ E2E、人类化输入 isTrusted E2E、console getter 静默、以及 BroTector
 
 ## 编译内核
 
+**每次 release 都会自动附带预编译内核。**`v*` tag 触发 GitHub Actions 在
+托管 runner 上编译 **linux-x64**（`veil-chromium-*-linux-x64.tar.zst`）与
+**win-x64**（`veil-chromium-*-win-x64.zip`）内核包——为迁就 4 核/6 小时的
+CI 限制，采用 `symbol_level=0`、无 PGO、关 ThinLTO 的配置。下面的本地
+ThinLTO 构建仍是发布级路径。
+
 本仓库**只版本化补丁**——不提交 Chromium 源码或二进制。自行编译：
 
 ```bash
-bash scripts/build-kernel.sh dist/        # 约 100 GB 磁盘，8 核约 100 分钟
+bash scripts/build-kernel.sh dist/        # 约 100 GB 磁盘，8 核约 100 分钟（ThinLTO）
+VEIL_THINLTO=0 bash scripts/build-kernel.sh dist/   # 更快，CI 级
 ```
 
-或在自有 runner 上跑 `kernel (self-hosted)` GitHub Actions 工作流
-（托管 runner 磁盘不够）。脚本会下载 ungoogled-chromium、prune、套用
-上游 + 指纹补丁、域替换，产出 `veil-chromium-*.tar.zst` 内核包。
-`022-030` 是纯 C++ 引擎补丁：媒体查询/屏幕一致性、内嵌度量字体、桌面
-环境（voices/mediaDevices/配额/采样率）、WebGL 上限、窗口
-devicePixelRatio、navigator.connection 网络质量、getBBox 一致性、蓝牙
-可用性。022–026 由构建树 diff 生成，028–030 手写维护。
+Windows x64：把
+[ungoogled-chromium-windows](https://github.com/ungoogled-software/ungoogled-chromium-windows)
+clone 到与 Chromium 版本匹配的 tag，再用
+`scripts/build-kernel-windows.py` 驱动（见脚本头部说明；与 `kernel`
+GitHub Actions 工作流同一流程）。
+
+脚本下载经哈希校验的 chromium-lite tarball，prune、套用上游 + 指纹补丁、
+域替换、引导固定版本的工具链（clang/rust/gn，无需 depot_tools），产出
+`veil-chromium-*.tar.zst` 内核包。`022-030` 是纯 C++ 引擎补丁：媒体
+查询/屏幕一致性、内嵌度量字体、桌面环境（voices/mediaDevices/配额/采样
+率）、WebGL 上限、窗口 devicePixelRatio、navigator.connection 网络质量、
+getBBox 一致性、蓝牙可用性。022–026 由构建树 diff 生成，028–030 手写维护。
 改动构建树后用 `python3 scripts/gen_kernel_patches.py --tree <checkout>`
 重新生成（字体载荷在 `scripts/kernel-fonts/`，由
 `scripts/gen_metric_fonts.py` 生成进内核源码）。
@@ -314,7 +330,8 @@ devicePixelRatio、navigator.connection 网络质量、getBBox 一致性、蓝�
   彻底一致需要 C++ 级重排。
 - **Android 档位**（CloakBrowser #533 同类需求）：需要内核平台开关与
   移动端 GPU/屏幕池配套，暂未实现。
-- **macOS / Windows 支持**（当前仅 Linux x86_64）。
+- **macOS 支持**（CI 已随 release 自动产出 linux-x64 与 win-x64 内核；
+  win-x64 较新，实战验证少于 Linux）。
 - **生态**：Playwright/Puppeteer drop-in API、多语言客户端 UI、
   Docker/远程 CDP 服务模式、档案管理 GUI。
 

@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 from dataclasses import asdict, dataclass, field, fields, replace
+from pathlib import Path
 
 PLATFORMS = ("windows", "macos", "linux")
 
@@ -190,3 +192,26 @@ def from_preset(name: str, seed: int) -> FingerprintProfile:
     if name not in PRESETS:
         raise KeyError(f"unknown preset {name!r}; available: {', '.join(PRESETS)}")
     return FingerprintProfile(seed=seed, **PRESETS[name]).resolved()
+
+
+def resolve_fingerprint(value: "int | str | os.PathLike[str]") -> FingerprintProfile:
+    """Auto-detect a fingerprint spec: a number means the seed, anything else
+    is a path to a saved profile JSON (FingerprintProfile.save format).
+
+    This is what powers ``--fingerprint=42`` and
+    ``--fingerprint=myprofile.json`` on the CLI, and ``launch(fingerprint=...)``
+    in the API — one argument, reusable identities.
+    """
+    if isinstance(value, FingerprintProfile):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return FingerprintProfile(seed=value)
+    text = os.fspath(value)
+    if text.lstrip("-").isdigit():
+        return FingerprintProfile(seed=int(text))
+    path = Path(text).expanduser()
+    if path.is_file():
+        return FingerprintProfile.load(str(path))
+    raise ValueError(
+        f"fingerprint {text!r} is neither a seed number nor an existing "
+        f"fingerprint JSON file")
