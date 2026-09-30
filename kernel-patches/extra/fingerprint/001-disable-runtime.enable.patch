@@ -2,10 +2,13 @@ diff --git a/v8/src/inspector/v8-runtime-agent-impl.cc b/v8/src/inspector/v8-run
 index 2d3cf64938..d3ad58dd2b 100644
 --- a/v8/src/inspector/v8-runtime-agent-impl.cc
 +++ b/v8/src/inspector/v8-runtime-agent-impl.cc
-@@ -1056,27 +1056,28 @@ void V8RuntimeAgentImpl::bindingCalled(const String16& name,
+@@ -1071,32 +1071,33 @@ void V8RuntimeAgentImpl::bindingCalled(const String16& name,
+ }
  
  void V8RuntimeAgentImpl::addBindings(InspectedContext* context) {
-   const String16 contextName = context->humanReadableName();
+-  int contextGroupId = context->contextGroupId();
+-  int contextId = context->contextId();
+-  const String16 contextName = context->humanReadableName();
 -  if (!m_enabled) return;
 -
 -  protocol::DictionaryValue* globalBindings =
@@ -13,6 +16,7 @@ index 2d3cf64938..d3ad58dd2b 100644
 -  if (globalBindings) {
 -    for (size_t i = 0; i < globalBindings->size(); ++i) {
 -      addBinding(context, globalBindings->at(i).first);
+-      if (!m_inspector->getContext(contextGroupId, contextId)) return;
 -    }
 -  }
 -
@@ -24,30 +28,36 @@ index 2d3cf64938..d3ad58dd2b 100644
 -    if (bindings) {
 -      for (size_t i = 0; i < bindings->size(); ++i) {
 -        addBinding(context, bindings->at(i).first);
+-        if (!m_inspector->getContext(contextGroupId, contextId)) return;
 -      }
 -    }
 -  }
 +  return;
++  // int contextGroupId = context->contextGroupId();
++  // int contextId = context->contextId();
++  // const String16 contextName = context->humanReadableName();
 +  // if (!m_enabled) return;
 +  //
 +  // protocol::DictionaryValue* globalBindings =
-+  //     m_state->getObject(V8RuntimeAgentImplState::globalBindings);
++  // m_state->getObject(V8RuntimeAgentImplState::globalBindings);
 +  // if (globalBindings) {
-+  //   for (size_t i = 0; i < globalBindings->size(); ++i) {
-+  //     addBinding(context, globalBindings->at(i).first);
-+  //   }
++  // for (size_t i = 0; i < globalBindings->size(); ++i) {
++  // addBinding(context, globalBindings->at(i).first);
++  // if (!m_inspector->getContext(contextGroupId, contextId)) return;
++  // }
 +  // }
 +  //
 +  // protocol::DictionaryValue* contextBindings =
-+  //     m_state->getObject(V8RuntimeAgentImplState::contextBindings);
++  // m_state->getObject(V8RuntimeAgentImplState::contextBindings);
 +  // if (contextBindings) {
-+  //   protocol::DictionaryValue* bindings =
-+  //       contextBindings->getObject(contextName);
-+  //   if (bindings) {
-+  //     for (size_t i = 0; i < bindings->size(); ++i) {
-+  //       addBinding(context, bindings->at(i).first);
-+  //     }
-+  //   }
++  // protocol::DictionaryValue* bindings =
++  // contextBindings->getObject(contextName);
++  // if (bindings) {
++  // for (size_t i = 0; i < bindings->size(); ++i) {
++  // addBinding(context, bindings->at(i).first);
++  // if (!m_inspector->getContext(contextGroupId, contextId)) return;
++  // }
++  // }
 +  // }
  }
  
