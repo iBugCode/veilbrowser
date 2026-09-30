@@ -126,3 +126,71 @@ class TestLocalForwarder:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("127.0.0.1", port))
         s.close()
+
+
+class TestIdentityBinding:
+    """Persistent-profile identity binding (no kernel binary needed)."""
+
+    def _profile(self, seed, **kw):
+        return FingerprintProfile(seed=seed, **kw).resolved()
+
+    def test_first_call_writes_identity(self, tmp_path):
+        from veilbrowser.browser import _bind_identity
+        udd = str(tmp_path / "p")
+        ident = _bind_identity(udd, self._profile(71, platform="windows"))
+        assert ident["seed"] == 71
+        assert ident["platform"] == "windows"
+        import json
+        import os
+        with open(os.path.join(udd, "veil-identity.json")) as f:
+            stored = json.load(f)
+        assert stored == ident
+
+    def test_same_identity_passes(self, tmp_path):
+        from veilbrowser.browser import _bind_identity
+        udd = str(tmp_path / "p")
+        _bind_identity(udd, self._profile(72, platform="macos",
+                                          language="en-US"))
+        _bind_identity(udd, self._profile(72, platform="macos",
+                                          language="en-US"))
+
+    def test_different_identity_raises_with_fields(self, tmp_path):
+        from veilbrowser.browser import IdentityMismatch, _bind_identity
+        udd = str(tmp_path / "p")
+        _bind_identity(udd, self._profile(73, platform="windows"))
+        with pytest.raises(IdentityMismatch, match="seed"):
+            _bind_identity(udd, self._profile(74, platform="windows"))
+        with pytest.raises(IdentityMismatch, match="platform"):
+            _bind_identity(udd, self._profile(73, platform="linux"))
+
+    def test_rebind_replaces_identity(self, tmp_path):
+        from veilbrowser.browser import _bind_identity
+        udd = str(tmp_path / "p")
+        _bind_identity(udd, self._profile(75, platform="windows"))
+        ident = _bind_identity(udd, self._profile(76, platform="linux"),
+                               rebind=True)
+        assert ident["seed"] == 76
+        # a subsequent non-rebind launch must accept the new identity
+        _bind_identity(udd, self._profile(76, platform="linux"))
+
+    def test_corrupt_identity_file_fails_open(self, tmp_path):
+        from veilbrowser.browser import _bind_identity
+        udd = str(tmp_path / "p")
+        import os
+        os.makedirs(udd, exist_ok=True)
+        with open(os.path.join(udd, "veil-identity.json"), "w") as f:
+            f.write("{not json")
+        ident = _bind_identity(udd, self._profile(77))
+        assert ident["seed"] == 77  # launched, and the file got rewritten
+        with open(os.path.join(udd, "veil-identity.json")) as f:
+            import json
+            assert json.load(f)["seed"] == 77
+
+    def test_geo_aligned_timezone_is_bound(self, tmp_path):
+        # explicit timezone participates in the binding: relaunching the same
+        # profile dir with a different tz must be a visible decision
+        from veilbrowser.browser import IdentityMismatch, _bind_identity
+        udd = str(tmp_path / "p")
+        _bind_identity(udd, self._profile(78, timezone="Asia/Tokyo"))
+        with pytest.raises(IdentityMismatch, match="timezone"):
+            _bind_identity(udd, self._profile(78, timezone="Europe/Berlin"))

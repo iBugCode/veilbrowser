@@ -27,6 +27,65 @@ from .proxy import LocalForwarder, UpstreamProxy, parse_proxy_url
 
 _DEVTOOLS_RE = re.compile(r"DevTools listening on (ws://\S+)")
 
+# Written into a persistent user_data_dir on first launch; relaunches with a
+# different identity are refused instead of silently drifting (camoufox
+# #442/#765, CloakBrowser #553).
+_IDENTITY_FILE = "veil-identity.json"
+
+_IDENTITY_FIELDS = ("seed", "platform", "platform_version", "brand",
+                    "brand_version", "language", "timezone",
+                    "hardware_concurrency")
+
+
+class IdentityMismatch(RuntimeError):
+    """A persistent profile dir is being relaunched with a different identity.
+
+    The seed (and the resolved platform/language/timezone/brand/concurrency
+    identity) is bound to the user_data_dir on first launch; reusing that dir
+    with another identity would make the account's fingerprint drift. Pass
+    rebind=True to deliberately replace the stored identity."""
+
+
+def _identity_of(profile: FingerprintProfile) -> dict:
+    return {k: getattr(profile, k) for k in _IDENTITY_FIELDS}
+
+
+def _bind_identity(user_data_dir: str, profile: FingerprintProfile,
+                   rebind: bool = False) -> dict:
+    """Bind a resolved profile identity to a persistent profile dir.
+
+    First launch writes veil-identity.json; later launches must either match
+    or explicitly opt into rebinding. Fails open (returns {}) when the
+    identity file exists but cannot be read — a corrupt marker must not
+    wedge the profile."""
+    import json
+    os.makedirs(user_data_dir, exist_ok=True)
+    path = os.path.join(user_data_dir, _IDENTITY_FILE)
+    identity = _identity_of(profile)
+    stored = None
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                stored = json.load(f)
+        except (OSError, ValueError):
+            stored = None  # unreadable marker: launch anyway, rewrite below
+        if stored == identity:
+            return identity
+        if stored is not None and not rebind:
+            differs = [k for k in _IDENTITY_FIELDS
+                       if stored.get(k) != identity[k]]
+            raise IdentityMismatch(
+                f"profile {user_data_dir} was created with a different "
+                f"fingerprint identity; differs in: {', '.join(differs)}. "
+                f"Reuse the original seed/profile, or pass rebind=True to "
+                f"replace the stored identity (the account will look like a "
+                f"different device).")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(identity, f, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+    return identity
+
 
 class _WorkerScopeInjector(threading.Thread):
     """Inject the fingerprint bundle into worker/ServiceWorker scopes.
@@ -334,7 +393,8 @@ def launch(profile: FingerprintProfile | None = None,
            software_webgl: bool | None = None,
            extra_flags: list[str] | None = None,
            start_timeout: float = 20.0,
-           js_overlay: bool = False) -> Browser:
+           js_overlay: bool = False,
+           rebind: bool = False) -> Browser:
     """Start the browser. Blocks until the DevTools endpoint is up.
 
     engine selects where the fingerprint lives:
@@ -351,6 +411,11 @@ def launch(profile: FingerprintProfile | None = None,
     bundle's canvas section only — fingerprint-chromium leaves pure-text
     canvas readbacks unnoised; the overlay closes that without touching the
     kernel-owned identity.
+
+    A persistent ``user_data_dir`` binds the resolved identity (seed,
+    platform, language, timezone, brand, concurrency) on first launch;
+    relaunching it with a different identity raises IdentityMismatch unless
+    ``rebind=True``.
 
     A proxy with credentials on the profile is transparently wrapped in a
     local authenticated forwarder (--proxy-server cannot auth).
@@ -379,6 +444,8 @@ def launch(profile: FingerprintProfile | None = None,
                           or profile.webrtc_ip is None):
         profile = _geo_align(profile)
     profile = profile.resolved()
+    if user_data_dir:  # persistent profile: refuse silent identity drift
+        _bind_identity(udd, profile, rebind=rebind)
     if profile.proxy:
         _seed_webrtc_prefs(udd)
 

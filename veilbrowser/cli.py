@@ -57,7 +57,8 @@ def _profile_from_args(args: argparse.Namespace) -> FingerprintProfile:
 def cmd_launch(args: argparse.Namespace) -> int:
     prof = _profile_from_args(args)
     b = launch(prof, engine=args.engine, headless=not args.headed,
-               binary=default_binary(vanilla=args.vanilla) if args.vanilla else None)
+               binary=default_binary(vanilla=args.vanilla) if args.vanilla else None,
+               rebind=args.rebind)
     try:
         from .probe import collect, open_probe_page, print_report
         if args.url != "about:blank":
@@ -144,6 +145,10 @@ def main(argv: list[str] | None = None) -> int:
     p_launch.add_argument("--url", default="about:blank")
     p_launch.add_argument("--headed", action="store_true", help="show a window (default headless)")
     p_launch.add_argument("--keep", action="store_true", help="keep browser running interactively")
+    p_launch.add_argument("--rebind", action="store_true",
+                          help="allow relaunching a persistent profile with a "
+                               "different fingerprint identity (replaces the "
+                               "stored veil-identity.json)")
     p_launch.add_argument("--quiet", action="store_true", help="dump raw JSON instead of a report")
     p_launch.set_defaults(func=cmd_launch)
 

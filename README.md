@@ -88,12 +88,20 @@ components are used** — no proprietary code is included or derived (see
   randomization accounted for) — the patch layer never touches the network
   stack.
 - **Pure C++ engine** (`engine="kernel"`, v0.9.0): the whole fingerprint is
-  Blink C++ patches (`kernel-patches/extra/fingerprint/022-026`) driven by
+  Blink C++ patches (`kernel-patches/extra/fingerprint/022-030`) driven by
   launch switches only — media-query/screen consistency, embedded
   metric-compatible fonts (Carlito/Caladea/Gelasio/Liberation), desktop
-  speech voices, media-device synthesis, desktop storage quota, 48 kHz
-  audio and GPU-plausible WebGL limits. Zero JS runs that isn't the
-  browser's own.
+  speech voices (host voices replaced, not just filled), media-device
+  synthesis, desktop storage quota, 48 kHz audio, GPU-plausible WebGL
+  limits, seed-derived `navigator.connection` quality (never the headless
+  `rtt=0 / downlink=10` tell), `getBBox()` sharing the DOMRect offset, and
+  per-seed `navigator.bluetooth.getAvailability()`. Zero JS runs that isn't
+  the browser's own.
+- **Identity binding**: a persistent `user_data_dir` records its resolved
+  identity (`veil-identity.json`) on first launch; relaunching it with a
+  different seed/platform/timezone raises `IdentityMismatch` instead of
+  silently drifting the account's fingerprint. `rebind=True` (or
+  `veilbrowser launch --rebind`) replaces it deliberately.
 - **Saved profiles**: `profile.save(path)` / `FingerprintProfile.load(path)`
   (and `veilbrowser profile-save`) — same file + same seed reproduces the
   same fingerprint for session reuse weeks later.
@@ -203,6 +211,29 @@ veilbrowser check --profile-file myprofile.json
 
 With a proxy configured, the WebRTC IP policy is preset to
 `disable_non_proxied_udp` — the real IP cannot bypass the proxy.
+
+Persistent profile dirs are also **identity-bound**: the first launch into a
+`user_data_dir` stores the resolved identity, and a later launch with a
+different seed or persona fails with `IdentityMismatch` rather than quietly
+becoming a different device. Deliberate replacement:
+
+```python
+veilbrowser.launch(profile, user_data_dir="/srv/profiles/acct-42", rebind=True)
+```
+
+### Honest notes
+
+- Rejection-rate spikes on reCAPTCHA/Cloudflare are usually **industry-wide
+  events** (FingerprintJS agent updates, Google-side rollouts), not a
+  regression of one browser build — check public detector sites before
+  blaming a version bump.
+- `navigator.connection` reports seed-derived plausible values. That is a
+  deliberate trade: real measurements from a headless/proxied host would be
+  the `rtt=0 / downlink=10` unknown-network tell.
+- `Math.tanh`-style floating-point fingerprints identify the *build
+  architecture* of the kernel binary. One shipped binary has one behavior;
+  a windows persona on an unusual host CPU cannot bit-match every Windows
+  Chrome build. Accepted residual, under evaluation.
 
 ### CLI
 
@@ -326,7 +357,8 @@ Or run the `kernel (self-hosted)` GitHub Actions workflow on your own
 runner (hosted runners don't have the disk). The script downloads
 ungoogled-chromium, prunes it, applies upstream + fingerprint patches,
 substitutes domains, and produces a `veil-chromium-*.tar.zst` kernel
-tarball.
+tarball. Patches 022–026 are generated from a build tree
+(`scripts/gen_kernel_patches.py`); 028–030 are maintained by hand.
 
 ## Roadmap (unfinished work)
 

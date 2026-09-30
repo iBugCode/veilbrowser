@@ -71,10 +71,17 @@ Windows 字体度量（度量兼容字体编译进二进制）、语音列表、
 - **TLS 指纹**：补丁内核 ClientHello 经归一化 ja3 对比与原版一致
   （GREASE 与扩展序随机性已归一）——补丁层不触碰网络栈。
 - **纯 C++ 引擎**（`engine="kernel"`，v0.9.0）：整套指纹是 Blink C++ 补丁
-  （`kernel-patches/extra/fingerprint/022-026`），仅由启动参数驱动——
+  （`kernel-patches/extra/fingerprint/022-030`），仅由启动参数驱动——
   媒体查询/屏幕一致性、内嵌度量兼容字体（Carlito/Caladea/Gelasio/
-  Liberation）、桌面语音列表、媒体设备合成、桌面存储配额、48 kHz 音频、
-  与 GPU 相符的 WebGL 上限。除浏览器自身代码外零 JS。
+  Liberation）、桌面语音列表（替换而非仅补空，杜绝宿主语音泄漏）、媒体
+  设备合成、桌面存储配额、48 kHz 音频、与 GPU 相符的 WebGL 上限、
+  seed 派生的 `navigator.connection` 网络质量（绝无 headless 的
+  `rtt=0 / downlink=10` 死值）、`getBBox()` 与 DOMRect 同源偏移、按 seed
+  稳定的 `navigator.bluetooth.getAvailability()`。除浏览器自身代码外零 JS。
+- **身份绑定**：持久化 `user_data_dir` 首次启动时记录解析后的身份
+  （`veil-identity.json`）；之后再以不同 seed/人设启动同一目录会抛
+  `IdentityMismatch`，而不是让账号指纹悄悄漂移。确要换身份时传
+  `rebind=True`（或 `veilbrowser launch --rebind`）显式覆盖。
 - **持久化档案**：`profile.save(path)` / `FingerprintProfile.load(path)`
   （及 `veilbrowser profile-save`）——同一档案文件 + 同一 seed，数周后
   复用仍是同一指纹（Camoufox #38/#442、CloakBrowser #320 同类需求）。
@@ -169,6 +176,25 @@ veilbrowser check --profile-file myprofile.json
 
 配置了代理时自动把 WebRTC IP 策略预置为 `disable_non_proxied_udp`，
 真实 IP 不会绕过代理泄露。
+
+持久化 profile 目录还会做**身份绑定**：首次启动 `user_data_dir` 时记录
+解析后的身份，之后用不同 seed 或人设启动同一目录会报 `IdentityMismatch`
+而不是悄悄变成另一台设备。确要替换时：
+
+```python
+veilbrowser.launch(profile, user_data_dir="/srv/profiles/acct-42", rebind=True)
+```
+
+### 诚实说明
+
+- reCAPTCHA/Cloudflare 拒绝率飙升通常是**行业性事件**（FingerprintJS
+  agent 更新、Google 侧调整），不是某个浏览器构建的回归——先看公共检测
+  站点，再怀疑版本升级。
+- `navigator.connection` 报告 seed 派生的合理值。这是有意取舍：headless/
+  代理宿主的"实测值"恰恰是 `rtt=0 / downlink=10` 的未知网络死值。
+- `Math.tanh` 一类浮点指纹识别的是内核二进制的**构建架构**。同一个发布
+  二进制只有一种行为；特殊宿主 CPU 上的 windows 人设无法与每一份
+  Windows Chrome 构建逐位一致。属已接受的残余项，评估中。
 
 ### CLI
 
@@ -273,8 +299,10 @@ bash scripts/build-kernel.sh dist/        # 约 100 GB 磁盘，8 核约 100 分
 或在自有 runner 上跑 `kernel (self-hosted)` GitHub Actions 工作流
 （托管 runner 磁盘不够）。脚本会下载 ungoogled-chromium、prune、套用
 上游 + 指纹补丁、域替换，产出 `veil-chromium-*.tar.zst` 内核包。
-`022-026` 是纯 C++ 引擎补丁：媒体查询/屏幕一致性、内嵌度量字体、桌面
-环境（voices/mediaDevices/配额/采样率）、WebGL 上限与窗口 devicePixelRatio。
+`022-030` 是纯 C++ 引擎补丁：媒体查询/屏幕一致性、内嵌度量字体、桌面
+环境（voices/mediaDevices/配额/采样率）、WebGL 上限、窗口
+devicePixelRatio、navigator.connection 网络质量、getBBox 一致性、蓝牙
+可用性。022–026 由构建树 diff 生成，028–030 手写维护。
 改动构建树后用 `python3 scripts/gen_kernel_patches.py --tree <checkout>`
 重新生成（字体载荷在 `scripts/kernel-fonts/`，由
 `scripts/gen_metric_fonts.py` 生成进内核源码）。

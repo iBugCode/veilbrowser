@@ -1,7 +1,10 @@
 """Integration tests against the real fingerprint-chromium kernel."""
 
+import os
+
 import pytest
 
+import veilbrowser
 from veilbrowser import FingerprintProfile
 from veilbrowser.probe import collect, open_probe_page
 
@@ -187,6 +190,34 @@ class TestSessions:
         b2 = make_browser(FingerprintProfile(seed=61), user_data_dir=udd)
         with open_probe_page(b2) as page:
             assert page.evaluate("localStorage.getItem('veil')") == "persisted"
+
+    def test_identity_bound_to_profile_dir(self, make_browser, tmp_path):
+        udd = str(tmp_path / "profile")
+        b = make_browser(FingerprintProfile(seed=63, platform="windows"),
+                         user_data_dir=udd)
+        b.stop()
+        import json
+        with open(os.path.join(udd, "veil-identity.json")) as f:
+            stored = json.load(f)
+        assert stored["seed"] == 63
+        assert stored["platform"] == "windows"
+
+        # same identity relaunches fine (camoufox #442/#765: no drift)
+        b2 = make_browser(FingerprintProfile(seed=63, platform="windows"),
+                          user_data_dir=udd)
+        b2.stop()
+
+        # a different seed on the same profile dir is refused, not silently
+        # drifted (CloakBrowser #553)
+        with pytest.raises(veilbrowser.IdentityMismatch, match="seed"):
+            make_browser(FingerprintProfile(seed=64), user_data_dir=udd)
+
+        # deliberate rebind replaces the stored identity
+        b3 = make_browser(FingerprintProfile(seed=64), user_data_dir=udd,
+                          rebind=True)
+        b3.stop()
+        with open(os.path.join(udd, "veil-identity.json")) as f:
+            assert json.load(f)["seed"] == 64
 
     def test_temp_user_data_dir_cleaned_on_stop(self, make_browser):
         b = make_browser(FingerprintProfile(seed=62))

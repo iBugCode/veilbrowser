@@ -83,11 +83,20 @@ WebGL 上限。ページで動くのはブラウザ自身のコードだけで�
   ストックバイナリと一致することを証明（GREASE と拡張順序のランダム化を
   吸収）——パッチ層はネットワークスタックに触れません。
 - **純 C++ エンジン**（`engine="kernel"`、v0.9.0）：指紋の全体が Blink C++
-  パッチ（`kernel-patches/extra/fingerprint/022-026`）で、起動スイッチの
+  パッチ（`kernel-patches/extra/fingerprint/022-030`）で、起動スイッチの
   みで駆動——メディアクエリ/画面整合、埋め込みメトリック互換フォント
-  （Carlito/Caladea/Gelasio/Liberation）、デスクトップ音声リスト、
-  メディアデバイス合成、デスクトップ ストレージ quota、48 kHz オーディオ、
-  GPU に整合した WebGL 上限。ブラウザ自身以外の JS はゼロ。
+  （Carlito/Caladea/Gelasio/Liberation）、デスクトップ音声リスト（空の補完
+  だけでなくホスト音声の置換、実 OS の漏えいを防止）、メディアデバイス
+  合成、デスクトップ ストレージ quota、48 kHz オーディオ、GPU に整合した
+  WebGL 上限、シード派生の `navigator.connection` 品質（headless の
+  `rtt=0 / downlink=10` 固定値を出さない）、DOMRect と同一オフセットの
+  `getBBox()`、シードごとに安定した
+  `navigator.bluetooth.getAvailability()`。ブラウザ自身以外の JS はゼロ。
+- **アイデンティティ バインディング**：永続 `user_data_dir` は初回起動時に
+  解決済みアイデンティティを記録し（`veil-identity.json`）、以後に異なる
+  シード/ペルソナで起動すると、指紋を静かに漂わせる代わりに
+  `IdentityMismatch` を送出します。意図的に置き換える場合は
+  `rebind=True`（または `veilbrowser launch --rebind`）。
 - **プロファイル永続化**：`profile.save(path)` /
   `FingerprintProfile.load(path)`（および `veilbrowser profile-save`）
   ——同一ファイル + 同一シードなら数週間後でも同一指紋を再現（Camoufox
@@ -188,6 +197,30 @@ veilbrowser check --profile-file myprofile.json
 
 プロキシ設定時は WebRTC IP ポリシーが `disable_non_proxied_udp` に
 プリセットされ、実 IP がプロキシを迂回して漏れることはありません。
+
+永続プロファイル ディレクトリは**アイデンティティ バインディング**され
+ます：`user_data_dir` への初回起動で解決済みアイデンティティを記録し、
+後から異なるシード/ペルソナで起動すると、静かに別デバイスになる代わりに
+`IdentityMismatch` で失敗します。意図的な置き換え：
+
+```python
+veilbrowser.launch(profile, user_data_dir="/srv/profiles/acct-42", rebind=True)
+```
+
+### 正直な注記
+
+- reCAPTCHA/Cloudflare の拒否率急上昇は、多くの場合**業界全体のイベント**
+  （FingerprintJS agent の更新、Google 側の変更）であり、特定ビルドの
+  リグレッションではありません——バージョン更新を疑う前に公開検出サイトを
+  確認してください。
+- `navigator.connection` はシード派生の妥当な値を報告します。これは意図的
+  なトレードオフです：headless/プロキシ ホストの「実測値」こそが
+  `rtt=0 / downlink=10` の未知ネットワーク固定値なのです。
+- `Math.tanh` 系の浮動小数点指紋が識別するのはカーネル バイナリの
+  **ビルド アーキテクチャ**です。出荷される一つのバイナリの挙動は一つ；
+  特殊なホスト CPU 上の windows ペルソナがすべての Windows Chrome
+  ビルドとビット単位で一致することはできません。受け入れ済みの残余項と
+  して評価中です。
 
 ### CLI
 
@@ -299,9 +332,11 @@ bash scripts/build-kernel.sh dist/        # 約 100 GB ディスク、8 コア�
 実行（ホステッド ランナーはディスクが足りません）。スクリプトは
 ungoogled-chromium をダウンロードし、prune、上流 + 指紋パッチ適用、
 ドメイン置換を行い、`veil-chromium-*.tar.zst` カーネル tarball を生成します。
-`022-026` が純 C++ エンジン パッチです：メディアクエリ/画面整合、
+`022-030` が純 C++ エンジン パッチです：メディアクエリ/画面整合、
 埋め込みメトリック フォント、デスクトップ環境（voices/mediaDevices/quota/
-サンプルレート）、WebGL 上限、window.devicePixelRatio。ビルドツリーを
+サンプルレート）、WebGL 上限、window.devicePixelRatio、
+navigator.connection 品質、getBBox 整合、Bluetooth 可用性。022–026 は
+ビルドツリー差分から生成、028–030 は手書きで維持します。ビルドツリーを
 変更したら `python3 scripts/gen_kernel_patches.py --tree <checkout>` で
 再生成してください（フォント ペイロードは `scripts/kernel-fonts/`、
 `scripts/gen_metric_fonts.py` でカーネル ソースに展開）。
