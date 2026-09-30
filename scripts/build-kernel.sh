@@ -58,10 +58,11 @@ mkdir -p download_cache src
 python3 ugc/utils/downloads.py retrieve -i "$PATCHES_DIR/downloads.ini" -c download_cache
 python3 - ugc/utils "$PATCHES_DIR/downloads.ini" <<'EOF'
 import sys
+from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import downloads
-info = downloads.DownloadInfo([sys.argv[2]])
-downloads.check_downloads(info, "download_cache", None)
+info = downloads.DownloadInfo([Path(sys.argv[2])])
+downloads.check_downloads(info, Path("download_cache"), None)
 print("==> tarball hash OK")
 EOF
 python3 ugc/utils/downloads.py unpack -i "$PATCHES_DIR/downloads.ini" -c download_cache src

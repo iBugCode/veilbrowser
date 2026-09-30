@@ -216,7 +216,12 @@ def main():
             get_logger().error('Files could not be pruned: %s', unremovable)
             return 1
 
-        # Unpack toolchain downloads into the tree
+        # Unpack toolchain downloads into the tree. The full tarball ships a
+        # placeholder third_party/llvm-build tree that collides with the
+        # downloaded Windows LLVM — drop it first (linux-only content).
+        llvm_build = source_tree / 'third_party' / 'llvm-build'
+        if llvm_build.exists():
+            shutil.rmtree(llvm_build)
         DIRECTX = source_tree / 'third_party' / 'microsoft_dxheaders' / 'src'
         ESBUILD = source_tree / 'third_party' / 'devtools-frontend' / 'src' / 'third_party' / 'esbuild'
         for d in (DIRECTX, ESBUILD):
