@@ -76,11 +76,19 @@ def _unpack_tarball(cache: Path, source_tree: Path) -> None:
 
 
 def _get_vcvars_path(name='64'):
-    """Returns the path to the corresponding vcvars*.bat path."""
+    """Returns the path to the corresponding vcvars*.bat path.
+
+    Prefers VS2022 (17.x): Chromium 153 requires it, and the newer VS on the
+    runner image points vcvars at an SDK that isn't installed.
+    """
     vswhere_exe = '%ProgramFiles(x86)%\\Microsoft Visual Studio\\Installer\\vswhere.exe'
-    result = subprocess.run(
-        '"{}" -products * -prerelease -latest -property installationPath'.format(vswhere_exe),
-        shell=True, check=True, stdout=subprocess.PIPE, universal_newlines=True)
+    for extra in (' -version "[17.0,18.0)"', ''):
+        result = subprocess.run(
+            '"{}" -products * -prerelease -latest{} -property installationPath'.format(
+                vswhere_exe, extra),
+            shell=True, check=True, stdout=subprocess.PIPE, universal_newlines=True)
+        if result.stdout.strip():
+            break
     vcvars_path = Path(result.stdout.strip(), 'VC/Auxiliary/Build/vcvars{}.bat'.format(name))
     if not vcvars_path.exists():
         raise RuntimeError('Could not find vcvars batch script: {}'.format(vcvars_path))

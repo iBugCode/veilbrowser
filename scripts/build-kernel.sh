@@ -127,7 +127,7 @@ cat >> src/out/Default/args.gn <<EOF
 target_cpu = "x64"
 v8_target_cpu = "x64"
 EOF
-[ "$THINLTO" = "1" ] || echo 'use_thin_lto = false' >> src/out/Default/args.gn
+[ "$THINLTO" = "1" ] || printf 'use_thin_lto = false\nis_cfi = false\n' >> src/out/Default/args.gn
 
 cd src
 python3 tools/gn/bootstrap/bootstrap.py -o out/Default/gn --skip-generate-buildfiles -j "$JOBS"
