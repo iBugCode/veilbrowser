@@ -1,8 +1,8 @@
 diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
-index fafe2cd534..f5ef2e5df8 100644
+index c6320fcb6dce766dfbf8fe23018e5f79c2352027..378b9b3e89ad9c3471577d24729e79c07bdde9e2 100644
 --- a/components/embedder_support/user_agent_utils.cc
 +++ b/components/embedder_support/user_agent_utils.cc
-@@ -31,6 +31,7 @@
+@@ -30,6 +30,7 @@
  #include "components/embedder_support/switches.h"
  #include "components/policy/core/common/policy_pref_names.h"
  #include "components/prefs/pref_service.h"
@@ -10,22 +10,22 @@ index fafe2cd534..f5ef2e5df8 100644
  #include "components/version_info/version_info.h"
  #include "net/http/http_util.h"
  #include "third_party/blink/public/common/features.h"
-@@ -249,9 +250,6 @@ const blink::UserAgentBrandList GetUserAgentBrandFullVersionListInternal(
- std::string GetUserAgentInternal(
-     UserAgentReductionEnterprisePolicyState user_agent_reduction) {
-   std::string product = GetProductAndVersion(user_agent_reduction);
+@@ -217,9 +218,6 @@ const blink::UserAgentBrandList GetUserAgentBrandFullVersionListInternal(
+ // depending on the Reduce User-Agent reduction phase features.
+ std::string GetUserAgentInternal() {
+   std::string product = GetProductAndVersion();
 -  if (base::CommandLine::ForCurrentProcess()->HasSwitch(kHeadless)) {
 -    product.insert(0, "Headless");
 -  }
  
  #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
    if (base::CommandLine::ForCurrentProcess()->HasSwitch(kUseMobileUserAgent)) {
-@@ -263,9 +261,12 @@ std::string GetUserAgentInternal(
-   // desktop UA strings.
-   // In User-Agent reduction phase 6, only apply the <unifiedPlatform> to
-   // android UA strings.
--  return ShouldSendUserAgentUnifiedPlatform(user_agent_reduction)
-+  std::string user_agent = ShouldSendUserAgentUnifiedPlatform(user_agent_reduction)
+@@ -227,9 +225,12 @@ std::string GetUserAgentInternal() {
+   }
+ #endif
+ 
+-  return ShouldSendUserAgentUnifiedPlatform()
++  std::string user_agent = ShouldSendUserAgentUnifiedPlatform()
               ? BuildUnifiedPlatformUserAgentFromProduct(product)
               : BuildUserAgentFromProduct(product);
 +  // 添加品牌信息到 User-Agent
@@ -34,7 +34,7 @@ index fafe2cd534..f5ef2e5df8 100644
  }
  
  // Generate random order list based on the input size and seed.
-@@ -317,6 +318,19 @@ blink::UserAgentBrandList ShuffleBrandList(
+@@ -281,6 +282,19 @@ blink::UserAgentBrandList ShuffleBrandList(
  }
  
  std::string GetUserAgentPlatform() {
@@ -54,7 +54,7 @@ index fafe2cd534..f5ef2e5df8 100644
  #if BUILDFLAG(IS_WIN)
    return "";
  #elif BUILDFLAG(IS_MAC)
-@@ -337,6 +351,18 @@ std::string GetUserAgentPlatform() {
+@@ -301,6 +315,18 @@ std::string GetUserAgentPlatform() {
  }
  
  std::string GetUnifiedPlatform() {
@@ -70,11 +70,11 @@ index fafe2cd534..f5ef2e5df8 100644
 +    return "Macintosh; Intel Mac OS X 10_15_7";
 +  }
 +}
- #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+ #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
    // This constant is only used on Android (desktop) and Linux.
-   constexpr char kUnifiedPlatformLinuxX64[] = "X11; Linux x86_64";
+   constexpr char kUnifiedPlatformChromeOSX64[] = "X11; CrOS x86_64 14541.0.0";
 diff --git a/components/ungoogled/BUILD.gn b/components/ungoogled/BUILD.gn
-index d8d23eb08b..9b48412404 100644
+index d8d23eb08b0a6080ae0843941b6281ecf9339712..9b484124043e84be34575659352d3baf1e5dd088 100644
 --- a/components/ungoogled/BUILD.gn
 +++ b/components/ungoogled/BUILD.gn
 @@ -4,6 +4,7 @@
@@ -87,7 +87,7 @@ index d8d23eb08b..9b48412404 100644
    ]
 diff --git a/components/ungoogled/fingerprint_data.h b/components/ungoogled/fingerprint_data.h
 new file mode 100644
-index 0000000000..da306cb31b
+index 0000000000000000000000000000000000000000..e0648fd95fb48bb903975c7382373e6ca4f4ee29
 --- /dev/null
 +++ b/components/ungoogled/fingerprint_data.h
 @@ -0,0 +1,71 @@
@@ -163,10 +163,10 @@ index 0000000000..da306cb31b
 +
 +#endif  // COMPONENTS_UNGOOGLED_FINGERPRINT_DATA_H_
 diff --git a/content/browser/client_hints/client_hints.cc b/content/browser/client_hints/client_hints.cc
-index 64c48a8ea5..46b9ceef53 100644
+index b990d5bb0a0d8486604401fd6f14c837fd34540d..84ca9ff5b00c48b1eb73dc8b9660992224531279 100644
 --- a/content/browser/client_hints/client_hints.cc
 +++ b/content/browser/client_hints/client_hints.cc
-@@ -711,6 +711,8 @@ void UpdateNavigationRequestClientUaHeadersImpl(
+@@ -710,6 +710,8 @@ void UpdateNavigationRequestClientUaHeadersImpl(
      if (!ua_metadata.has_value())
        ua_metadata = delegate->GetUserAgentMetadata();
  
@@ -176,15 +176,14 @@ index 64c48a8ea5..46b9ceef53 100644
      // (intentionally) different than other client hints.
      // It's barred behind ShouldAddClientHints to make sure it's controlled by
 diff --git a/third_party/blink/common/user_agent/user_agent_metadata.cc b/third_party/blink/common/user_agent/user_agent_metadata.cc
-index 5931bef1fc..77b333378f 100644
+index 4eab85a17e8397a62c5adc6eccd39d73248d2060..f089da9e58130375fd37839b282156c14c6929f2 100644
 --- a/third_party/blink/common/user_agent/user_agent_metadata.cc
 +++ b/third_party/blink/common/user_agent/user_agent_metadata.cc
-@@ -6,9 +6,14 @@
+@@ -6,8 +6,13 @@
  
- #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ #include <algorithm>
  
 +#include "base/command_line.h"
- #include "base/containers/contains.h"
  #include "base/containers/span.h"
  #include "base/pickle.h"
 +#include "base/strings/string_number_conversions.h"
@@ -194,7 +193,7 @@ index 5931bef1fc..77b333378f 100644
  #include "net/http/structured_headers.h"
  #include "third_party/blink/public/common/features.h"
  
-@@ -25,6 +30,74 @@ constexpr std::string_view kValidFormFactors[] = {
+@@ -24,6 +29,74 @@ constexpr std::string_view kValidFormFactors[] = {
      blink::kXRFormFactor,      blink::kEInkFormFactor,
      blink::kWatchFormFactor};
  
@@ -269,7 +268,7 @@ index 5931bef1fc..77b333378f 100644
  }  // namespace
  
  UserAgentBrandVersion::UserAgentBrandVersion(const std::string& ua_brand,
-@@ -218,4 +291,174 @@ bool operator==(const UserAgentOverride& a, const UserAgentOverride& b) {
+@@ -232,4 +305,174 @@ bool operator==(const UserAgentOverride& a, const UserAgentOverride& b) {
           a.ua_metadata_override == b.ua_metadata_override;
  }
  
@@ -445,7 +444,7 @@ index 5931bef1fc..77b333378f 100644
 +
  }  // namespace blink
 diff --git a/third_party/blink/public/common/user_agent/user_agent_metadata.h b/third_party/blink/public/common/user_agent/user_agent_metadata.h
-index fda7b49c11..c3053e6e74 100644
+index fda7b49c117a899074eb2d2f4920b87dad8a5548..c3053e6e7414b0f6bfdcae01f0a926f6bcdffbba 100644
 --- a/third_party/blink/public/common/user_agent/user_agent_metadata.h
 +++ b/third_party/blink/public/common/user_agent/user_agent_metadata.h
 @@ -106,6 +106,10 @@ bool BLINK_COMMON_EXPORT operator==(const UserAgentMetadata& a,
@@ -460,7 +459,7 @@ index fda7b49c11..c3053e6e74 100644
  
  #endif  // THIRD_PARTY_BLINK_PUBLIC_COMMON_USER_AGENT_USER_AGENT_METADATA_H_
 diff --git a/third_party/blink/renderer/core/execution_context/navigator_base.cc b/third_party/blink/renderer/core/execution_context/navigator_base.cc
-index fd5b8b548d..bb149e10db 100644
+index 523372b1cb9d56a0942061e698576f6a97d051db..71108926c3207882e4c71e899ec9d71e4d7cbb98 100644
 --- a/third_party/blink/renderer/core/execution_context/navigator_base.cc
 +++ b/third_party/blink/renderer/core/execution_context/navigator_base.cc
 @@ -4,7 +4,9 @@
@@ -494,7 +493,7 @@ index fd5b8b548d..bb149e10db 100644
    return "Linux armv81";
  #elif BUILDFLAG(IS_MAC)
 diff --git a/third_party/blink/renderer/core/frame/navigator.cc b/third_party/blink/renderer/core/frame/navigator.cc
-index bd972f2148..5ec967f9ea 100644
+index 62605c6e47336a19ef6aab008b8747e294382985..7e522f4f1a283c9cebdbf41a70881a85112e80f8 100644
 --- a/third_party/blink/renderer/core/frame/navigator.cc
 +++ b/third_party/blink/renderer/core/frame/navigator.cc
 @@ -21,6 +21,9 @@
@@ -506,8 +505,8 @@ index bd972f2148..5ec967f9ea 100644
 +#include "components/ungoogled/ungoogled_switches.h"
  #include "third_party/blink/renderer/core/frame/navigator.h"
  
- #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
-@@ -63,6 +66,20 @@ String Navigator::vendorSub() const {
+ #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
+@@ -56,6 +59,20 @@ String Navigator::vendorSub() const {
  }
  
  String Navigator::platform() const {
@@ -529,7 +528,7 @@ index bd972f2148..5ec967f9ea 100644
    // the platform with a frozen platform to distinguish between
    // mobile and desktop when ReduceUserAgent is enabled.
 diff --git a/third_party/blink/renderer/core/frame/navigator_ua.cc b/third_party/blink/renderer/core/frame/navigator_ua.cc
-index ff46a7fbfa..663caace2d 100644
+index 535774500923e6aacbb75146338b33caf1606801..b46b29acb0d9241443752e651791df43615b1d7f 100644
 --- a/third_party/blink/renderer/core/frame/navigator_ua.cc
 +++ b/third_party/blink/renderer/core/frame/navigator_ua.cc
 @@ -19,6 +19,9 @@ NavigatorUAData* NavigatorUA::userAgentData() {
@@ -541,12 +540,12 @@ index ff46a7fbfa..663caace2d 100644
 +
    ua_data->SetBrandVersionList(metadata.brand_version_list);
    ua_data->SetMobile(metadata.mobile);
-   ua_data->SetPlatform(String::FromUTF8(metadata.platform),
+   ua_data->SetPlatform(String::FromUtf8(metadata.platform),
 diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
-index df08802191..be73ea6eaf 100644
+index aacd021d03aa9752abc4dc18c3102b53459af68b..cc5396524ba71eacdc1dc74e60b9655ba6176224 100644
 --- a/third_party/blink/renderer/core/loader/frame_fetch_context.cc
 +++ b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
-@@ -39,6 +39,7 @@
+@@ -43,6 +43,7 @@ BASE_FEATURE(kFastMemoryCacheWithDevTools, base::FEATURE_ENABLED_BY_DEFAULT);
  #include "base/memory/scoped_refptr.h"
  #include "base/metrics/histogram_functions.h"
  #include "base/metrics/histogram_macros.h"
@@ -554,12 +553,11 @@ index df08802191..be73ea6eaf 100644
  #include "build/build_config.h"
  #include "mojo/public/cpp/bindings/associated_remote.h"
  #include "net/http/structured_headers.h"
-@@ -719,6 +720,8 @@ void FrameFetchContext::AddClientHintsIfNecessary(
+@@ -736,6 +737,7 @@ void FrameFetchContext::AddClientHintsIfNecessary(
  
    // Only send User Agent hints if the info is available
    if (ua) {
 +    UpdateUserAgentMetadataFingerprint(&ua.value());
-+
-     // ShouldSendClientHint is called to make sure UA is controlled by
-     // Permissions Policy.
-     if (ShouldSendClientHint(*policy, resource_origin, is_1p_origin,
+     bool ua_changed = !last_ua_ || *last_ua_ != *ua;
+     if (ua_changed) {
+       last_ua_ = *ua;

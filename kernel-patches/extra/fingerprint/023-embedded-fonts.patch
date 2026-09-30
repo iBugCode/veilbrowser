@@ -1,8 +1,8 @@
 diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
-index f0657fe..6bb84b7 100644
+index 0fffb4d00e25ff89bde081d56c290637675afdd4..54951542eed00f0c85cffd071fc4a9310e35b3ee 100644
 --- a/third_party/blink/renderer/platform/BUILD.gn
 +++ b/third_party/blink/renderer/platform/BUILD.gn
-@@ -658,6 +658,7 @@ component("platform") {
+@@ -646,6 +646,7 @@ component("platform") {
      "fonts/font.h",
      "fonts/font_baseline.h",
      "fonts/font_cache.cc",
@@ -11,7 +11,7 @@ index f0657fe..6bb84b7 100644
      "fonts/font_cache_client.h",
      "fonts/font_cache_key.h",
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
-index 36f07c0..9114b50 100644
+index 085386008fd907695780b8374abf449b302b23fe..e5e729dc2f00fff2763ea8bcde2364311b994d0c 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
 @@ -29,6 +29,8 @@
@@ -189,8 +189,9 @@ index 36f07c0..9114b50 100644
      } else {
        // 系统相同，随机隐藏2%的字体以生成指纹
 diff --git a/third_party/blink/renderer/platform/fonts/veil_metric_fonts.cc b/third_party/blink/renderer/platform/fonts/veil_metric_fonts.cc
-index e69de29..f2dcabb 100644
---- a/third_party/blink/renderer/platform/fonts/veil_metric_fonts.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..f2dcabbed77a1d4e3c0409918f1657d26c024ee9
+--- /dev/null
 +++ b/third_party/blink/renderer/platform/fonts/veil_metric_fonts.cc
 @@ -0,0 +1,6249 @@
 +// Copyright 2026 The veilbrowser Authors. BSD-style license.
@@ -6443,8 +6444,9 @@ index e69de29..f2dcabb 100644
 +}  // namespace veil
 +}  // namespace blink
 diff --git a/third_party/blink/renderer/platform/fonts/veil_metric_fonts.h b/third_party/blink/renderer/platform/fonts/veil_metric_fonts.h
-index e69de29..8402762 100644
---- a/third_party/blink/renderer/platform/fonts/veil_metric_fonts.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..84027622bfeac76e3dbd9f5b673bc4c261ac526c
+--- /dev/null
 +++ b/third_party/blink/renderer/platform/fonts/veil_metric_fonts.h
 @@ -0,0 +1,22 @@
 +// Copyright 2026 The veilbrowser Authors. BSD-style license.

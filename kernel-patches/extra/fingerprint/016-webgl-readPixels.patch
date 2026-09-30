@@ -1,24 +1,24 @@
 diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
-index 95e6caf973..96dc720397 100644
+index 95b58c1332ae497ce2ad2ca6069b2c05f0571cb0..ef2f29f69533210111e391a8b6b0e3952a529ff3 100644
 --- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
 +++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
-@@ -29,6 +29,7 @@
+@@ -31,6 +31,7 @@
  #include <utility>
  
  #include "base/bit_cast.h"
 +#include "base/command_line.h"
+ #include "base/byte_size.h"
  #include "base/compiler_specific.h"
- #include "base/containers/contains.h"
  #include "base/feature_list.h"
-@@ -41,6 +42,7 @@
- #include "base/task/single_thread_task_runner.h"
+@@ -45,6 +46,7 @@
+ #include "base/trace_event/memory_dump_manager.h"
  #include "base/trace_event/trace_event.h"
  #include "build/build_config.h"
 +#include "components/ungoogled/ungoogled_switches.h"
+ #include "components/viz/common/gpu/raster_context_provider.h"
+ #include "components/viz/common/resources/shared_image_format_utils.h"
  #include "device/vr/buildflags/buildflags.h"
- #include "device/vr/public/mojom/vr_service.mojom-blink-forward.h"
- #include "gpu/GLES2/gl2extchromium.h"
-@@ -136,6 +138,7 @@
+@@ -151,6 +153,7 @@
  #include "third_party/blink/renderer/platform/graphics/paint/paint_record_builder.h"
  #include "third_party/blink/renderer/platform/graphics/skia/sk_image_info_hash.h"
  #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
@@ -26,7 +26,7 @@ index 95e6caf973..96dc720397 100644
  #include "third_party/blink/renderer/platform/graphics/static_bitmap_image_transform.h"
  #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
  #include "third_party/blink/renderer/platform/graphics/video_frame_image_util.h"
-@@ -5143,6 +5146,33 @@ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
+@@ -5367,6 +5370,33 @@ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
        return;
      }
      ContextGL()->ReadPixels(x, y, width, height, format, type, data);

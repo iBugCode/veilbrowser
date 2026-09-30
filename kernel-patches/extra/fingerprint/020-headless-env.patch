@@ -1,6 +1,8 @@
---- a/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 16:48:22.143423680 +0000
-+++ b/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 15:57:50.722823282 +0000
-@@ -3909,6 +3909,7 @@
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index 171769b5a1d0a844517a3db24bb91de14b5d9fe3..a3eb7629cf0eaba9c9131c9fcae7874914ffc812 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -3909,6 +3909,7 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
        switches::kFingerprintScreenHeight,
        switches::kFingerprintScreenAvailWidth,
        switches::kFingerprintScreenAvailHeight,
@@ -8,9 +10,11 @@
        switches::kFingerprintDeviceScaleFactor,
        switches::kFingerprintHardwareConcurrency,
        switches::kFingerprintPlatform,
---- a/third_party/blink/renderer/core/dom/document.cc	2026-09-26 16:48:22.147423746 +0000
-+++ b/third_party/blink/renderer/core/dom/document.cc	2026-09-26 16:47:45.166808869 +0000
-@@ -9360,6 +9360,11 @@
+diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink/renderer/core/dom/document.cc
+index 336fe9673276cbe55562154739f3e6d11f2ec2cc..8cdae7554c72fed2017aceb60984a8227e6c153c 100644
+--- a/third_party/blink/renderer/core/dom/document.cc
++++ b/third_party/blink/renderer/core/dom/document.cc
+@@ -9360,6 +9360,11 @@ Element* Document::ActiveElement() const {
  }
  
  bool Document::hasFocus() const {
@@ -22,9 +26,11 @@
    return GetPage() && GetPage()->GetFocusController().IsDocumentFocused(*this);
  }
  
---- a/third_party/blink/renderer/modules/notifications/notification.cc	2026-09-26 16:48:22.147423746 +0000
-+++ b/third_party/blink/renderer/modules/notifications/notification.cc	2026-09-26 16:47:45.174809003 +0000
-@@ -449,6 +449,13 @@
+diff --git a/third_party/blink/renderer/modules/notifications/notification.cc b/third_party/blink/renderer/modules/notifications/notification.cc
+index 643d8339359b95d69f9ad139232e7de6d4389e55..25dbc5a8b61744f824fb0ec1468639ab880489ea 100644
+--- a/third_party/blink/renderer/modules/notifications/notification.cc
++++ b/third_party/blink/renderer/modules/notifications/notification.cc
+@@ -448,6 +448,13 @@ V8NotificationPermission Notification::permission(ExecutionContext* context) {
        status = mojom::blink::PermissionStatus::DENIED;
    }
  
@@ -38,9 +44,11 @@
    return V8NotificationPermission(PermissionToV8Enum(status));
  }
  
---- a/third_party/blink/renderer/modules/permissions/permissions.cc	2026-09-26 16:48:22.147423746 +0000
-+++ b/third_party/blink/renderer/modules/permissions/permissions.cc	2026-09-26 16:47:45.174809003 +0000
-@@ -277,6 +277,14 @@
+diff --git a/third_party/blink/renderer/modules/permissions/permissions.cc b/third_party/blink/renderer/modules/permissions/permissions.cc
+index e36c344035c0006fbb9f9bc50a42281744c6fb31..bccb0e6339663909918f69c887eece7ab730f27f 100644
+--- a/third_party/blink/renderer/modules/permissions/permissions.cc
++++ b/third_party/blink/renderer/modules/permissions/permissions.cc
+@@ -276,6 +276,14 @@ void Permissions::TaskComplete(
        resolver->GetExecutionContext()->IsContextDestroyed())
      return;
  

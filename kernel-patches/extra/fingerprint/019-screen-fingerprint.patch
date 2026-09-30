@@ -1,6 +1,8 @@
---- a/components/ungoogled/ungoogled_switches.cc	2026-09-26 17:36:14.461154651 +0000
-+++ b/components/ungoogled/ungoogled_switches.cc	2026-09-26 15:54:53.680049851 +0000
-@@ -36,6 +36,12 @@
+diff --git a/components/ungoogled/ungoogled_switches.cc b/components/ungoogled/ungoogled_switches.cc
+index 49f325e01c52aef47ef414c016e902028c7c926f..49b36e890a739959967f1ae359edadc6394cf4fc 100644
+--- a/components/ungoogled/ungoogled_switches.cc
++++ b/components/ungoogled/ungoogled_switches.cc
+@@ -36,6 +36,12 @@ const char kFingerprintScreenHeight[] = "fingerprint-screen-height";
  // Specify the device scale factor
  const char kFingerprintDeviceScaleFactor[] = "fingerprint-device-scale-factor";
  
@@ -13,9 +15,11 @@
  // Specify the number of CPU cores
  const char kFingerprintHardwareConcurrency[] = "fingerprint-hardware-concurrency";
  
---- a/components/ungoogled/ungoogled_switches.h	2026-09-26 17:36:14.461154651 +0000
-+++ b/components/ungoogled/ungoogled_switches.h	2026-09-26 15:54:53.680049851 +0000
-@@ -21,6 +21,8 @@
+diff --git a/components/ungoogled/ungoogled_switches.h b/components/ungoogled/ungoogled_switches.h
+index 2ec06c3acde53b65914dcec6c5f967c503edeedf..f2c5c449ef63ed60f96de87038dcba56871f110c 100644
+--- a/components/ungoogled/ungoogled_switches.h
++++ b/components/ungoogled/ungoogled_switches.h
+@@ -21,6 +21,8 @@ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintBrandVersion[];
  COMPONENT_EXPORT(UNGOOGLED) extern const char kDisableSpoofing[];
  COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintScreenWidth[];
  COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintScreenHeight[];
@@ -24,69 +28,23 @@
  COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintDeviceScaleFactor[];
  COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintHardwareConcurrency[];
  COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintPlatform[];
---- a/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 17:36:14.461154651 +0000
-+++ b/content/browser/renderer_host/render_process_host_impl.cc	2026-09-26 15:57:50.722823282 +0000
-@@ -3907,6 +3907,8 @@
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index d15aee61f1ef43482de278da325c1a35f3f2ec52..171769b5a1d0a844517a3db24bb91de14b5d9fe3 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -3907,6 +3907,8 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
        switches::kDisableSpoofing,
        switches::kFingerprintScreenWidth,
        switches::kFingerprintScreenHeight,
 +      switches::kFingerprintScreenAvailWidth,
 +      switches::kFingerprintScreenAvailHeight,
-       "headless",
        switches::kFingerprintDeviceScaleFactor,
        switches::kFingerprintHardwareConcurrency,
---- a/tools/idl_parser/idl_lexer.py	2026-09-26 17:36:14.461154651 +0000
-+++ b/tools/idl_parser/idl_lexer.py	2026-09-26 17:32:51.059393955 +0000
-@@ -159,14 +159,16 @@
- 
-   # A symbol or keyword.
-   def t_KEYWORD_OR_SYMBOL(self, t):
--    r'[_-]?[A-Za-z][A-Za-z_0-9-]*'
-+    r'[_-]*[A-Za-z][A-Za-z_0-9-]*'
- 
-     # All non-keywords are assumed to be symbols
-     t.type = self.keywords.get(t.value, 'identifier')
- 
--    # We strip leading underscores so that you can specify symbols with the same
--    # value as a keywords (E.g. a dictionary named 'interface').
--    if t.value[0] == '_':
-+    # We strip a single leading underscore so that you can specify symbols
-+    # with the same value as a keywords (E.g. a dictionary named 'interface').
-+    # Two or more leading underscores are kept verbatim: veilbrowser exposes
-+    # screen.__width / screen.__height through the IDL that way.
-+    if t.value[0] == '_' and not t.value.startswith('__'):
-       t.value = t.value[1:]
-     return t
- 
---- a/third_party/blink/renderer/core/frame/screen.idl	2026-09-26 17:36:14.461154651 +0000
-+++ b/third_party/blink/renderer/core/frame/screen.idl	2026-09-26 17:33:23.811647673 +0000
-@@ -43,6 +43,11 @@
-     [Measure] readonly attribute long availLeft;
-     [Measure] readonly attribute long availTop;
- 
-+    // Non-standard (veilbrowser): the real host window size behind the
-+    // fingerprint screen, as an operator diagnostics escape hatch.
-+    [ImplementedAs=realOuterWidth] readonly attribute long __width;
-+    [ImplementedAs=realOuterHeight] readonly attribute long __height;
-+
-     // Fired when the window’s screen or that screen's attributes change.
-     // https://w3c.github.io/window-management/
-     [SecureContext, MeasureAs=WindowScreenChange] attribute EventHandler onchange;
---- a/third_party/blink/renderer/core/frame/screen.h	2026-09-26 17:36:14.461154651 +0000
-+++ b/third_party/blink/renderer/core/frame/screen.h	2026-09-26 15:54:53.680049851 +0000
-@@ -66,6 +66,10 @@
-   int availHeight() const;
-   int availWidth() const;
- 
-+  // Real host window size (screen.__width / screen.__height).
-+  int realOuterWidth() const;
-+  int realOuterHeight() const;
-+
-   void Trace(Visitor*) const override;
- 
-   // EventTarget:
---- a/third_party/blink/renderer/core/frame/screen.cc	2026-09-26 17:36:14.461154651 +0000
-+++ b/third_party/blink/renderer/core/frame/screen.cc	2026-09-26 15:54:53.680049851 +0000
+       switches::kFingerprintPlatform,
+diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
+index ed5028943e3d702f7332807f7fdff73c906dde51..02f891a28b84cfdd74752efda1203711288fb33f 100644
+--- a/third_party/blink/renderer/core/frame/screen.cc
++++ b/third_party/blink/renderer/core/frame/screen.cc
 @@ -28,6 +28,10 @@
  
  #include "third_party/blink/renderer/core/frame/screen.h"
@@ -120,7 +78,7 @@
  Screen::Screen(LocalDOMWindow* window, int64_t display_id)
      : ExecutionContextClient(window), display_id_(display_id) {}
  
-@@ -90,13 +109,25 @@
+@@ -90,13 +109,25 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
  int Screen::height() const {
    if (!DomWindow())
      return 0;
@@ -148,7 +106,7 @@
  }
  
  unsigned Screen::colorDepth() const {
-@@ -133,13 +164,15 @@
+@@ -133,13 +164,15 @@ int Screen::availTop() const {
  int Screen::availHeight() const {
    if (!DomWindow())
      return 0;
@@ -166,3 +124,59 @@
  }
  
  void Screen::Trace(Visitor* visitor) const {
+diff --git a/third_party/blink/renderer/core/frame/screen.h b/third_party/blink/renderer/core/frame/screen.h
+index 787aa750ae6e4cddd195cee31ab39bd73a3c35b2..1fe73c8e86ee35b5dae121d1b0276377aefe36a2 100644
+--- a/third_party/blink/renderer/core/frame/screen.h
++++ b/third_party/blink/renderer/core/frame/screen.h
+@@ -66,6 +66,10 @@ class CORE_EXPORT Screen : public EventTarget,
+   int availHeight() const;
+   int availWidth() const;
+ 
++  // Real host window size (screen.__width / screen.__height).
++  int realOuterWidth() const;
++  int realOuterHeight() const;
++
+   void Trace(Visitor*) const override;
+ 
+   // EventTarget:
+diff --git a/third_party/blink/renderer/core/frame/screen.idl b/third_party/blink/renderer/core/frame/screen.idl
+index c4c9ee399362c78bfcaf74e87d39e7d02db04c57..e041af0390021e71c2390b758b5ad8a28372065e 100644
+--- a/third_party/blink/renderer/core/frame/screen.idl
++++ b/third_party/blink/renderer/core/frame/screen.idl
+@@ -43,6 +43,11 @@
+     [Measure] readonly attribute long availLeft;
+     [Measure] readonly attribute long availTop;
+ 
++    // Non-standard (veilbrowser): the real host window size behind the
++    // fingerprint screen, as an operator diagnostics escape hatch.
++    [ImplementedAs=realOuterWidth] readonly attribute long __width;
++    [ImplementedAs=realOuterHeight] readonly attribute long __height;
++
+     // Fired when the window’s screen or that screen's attributes change.
+     // https://w3c.github.io/window-management/
+     [SecureContext, MeasureAs=WindowScreenChange] attribute EventHandler onchange;
+diff --git a/tools/idl_parser/idl_lexer.py b/tools/idl_parser/idl_lexer.py
+index ec4d623123429485442b9874b7b6086b679edf29..1b5645c545f30740fc2dfaab72a0d73409030b46 100755
+--- a/tools/idl_parser/idl_lexer.py
++++ b/tools/idl_parser/idl_lexer.py
+@@ -159,14 +159,16 @@ class IDLLexer(object):
+ 
+   # A symbol or keyword.
+   def t_KEYWORD_OR_SYMBOL(self, t):
+-    r'[_-]?[A-Za-z][A-Za-z_0-9-]*'
++    r'[_-]*[A-Za-z][A-Za-z_0-9-]*'
+ 
+     # All non-keywords are assumed to be symbols
+     t.type = self.keywords.get(t.value, 'identifier')
+ 
+-    # We strip leading underscores so that you can specify symbols with the same
+-    # value as a keywords (E.g. a dictionary named 'interface').
+-    if t.value[0] == '_':
++    # We strip a single leading underscore so that you can specify symbols
++    # with the same value as a keywords (E.g. a dictionary named 'interface').
++    # Two or more leading underscores are kept verbatim: veilbrowser exposes
++    # screen.__width / screen.__height through the IDL that way.
++    if t.value[0] == '_' and not t.value.startswith('__'):
+       t.value = t.value[1:]
+     return t
+ 

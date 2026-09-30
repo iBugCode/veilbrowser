@@ -1,5 +1,5 @@
 diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink/renderer/core/dom/document.cc
-index 08b6f4ac97..301c1b7cbd 100644
+index ded7e2cd6bff080448a7dd308c8ab24c6357d37a..336fe9673276cbe55562154739f3e6d11f2ec2cc 100644
 --- a/third_party/blink/renderer/core/dom/document.cc
 +++ b/third_party/blink/renderer/core/dom/document.cc
 @@ -35,6 +35,7 @@
@@ -8,9 +8,9 @@ index 08b6f4ac97..301c1b7cbd 100644
  #include "base/auto_reset.h"
 +#include "base/command_line.h"
  #include "base/containers/adapters.h"
- #include "base/containers/contains.h"
+ #include "base/dcheck_is_on.h"
  #include "base/debug/dump_without_crashing.h"
-@@ -49,6 +50,7 @@
+@@ -50,6 +51,7 @@
  #include "cc/animation/animation_timeline.h"
  #include "cc/input/overscroll_behavior.h"
  #include "cc/input/scroll_snap_data.h"
@@ -18,9 +18,9 @@ index 08b6f4ac97..301c1b7cbd 100644
  #include "mojo/public/cpp/bindings/lib/wtf_hash_util.h"
  #include "mojo/public/cpp/bindings/pending_remote.h"
  #include "mojo/public/cpp/bindings/remote.h"
-@@ -1094,10 +1096,23 @@ Document::Document(const DocumentInit& initializer,
-   TRACE_EVENT_WITH_FLOW0("blink", "Document::Document", TRACE_ID_LOCAL(this),
-                          TRACE_EVENT_FLAG_FLOW_OUT);
+@@ -1058,10 +1060,23 @@ Document::Document(const DocumentInit& initializer,
+       data_(MakeGarbageCollected<DocumentData>(GetExecutionContext())) {
+   TRACE_EVENT("blink", "Document::Document", perfetto::Flow::FromPointer(this));
    DCHECK(agent_);
 -  if (RuntimeEnabledFeatures::FingerprintingClientRectsNoiseEnabled()) {
 -    // Precompute -0.0003% to 0.0003% noise factor for get*ClientRect*() fingerprinting
@@ -47,7 +47,7 @@ index 08b6f4ac97..301c1b7cbd 100644
    if (base::FeatureList::IsEnabled(features::kDelayAsyncScriptExecution) &&
        features::kDelayAsyncScriptExecutionDelayByDefaultParam.Get()) {
 diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
-index ed791a4727..83a0712374 100644
+index 710ec7751bededb148ad42e4e807eef640d19e61..4f73bff4a3545bd21a15d56a973b8578a8f90731 100644
 --- a/third_party/blink/renderer/core/dom/element.cc
 +++ b/third_party/blink/renderer/core/dom/element.cc
 @@ -32,9 +32,11 @@
@@ -59,10 +59,10 @@ index ed791a4727..83a0712374 100644
  #include "base/feature_list.h"
  #include "cc/input/snap_selection_strategy.h"
 +#include "components/ungoogled/ungoogled_switches.h"
+ #include "components/viz/common/surfaces/tracked_element_rects.h"
  #include "third_party/blink/public/common/features.h"
- #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom-blink.h"
- #include "third_party/blink/public/web/web_autofill_state.h"
-@@ -3229,6 +3231,28 @@ void Element::ClientQuads(Vector<gfx::QuadF>& quads) const {
+ #include "third_party/blink/public/mojom/scroll/scroll_enums.mojom-blink.h"
+@@ -3358,6 +3360,28 @@ void Element::ClientQuads(Vector<gfx::QuadF>& quads) const {
    }
  }
  
@@ -91,7 +91,7 @@ index ed791a4727..83a0712374 100644
  DOMRectList* Element::getClientRects() {
    Vector<gfx::RectF> rects = GetClientRectsNoAdjustment();
    if (rects.empty()) {
-@@ -3240,6 +3264,16 @@ DOMRectList* Element::getClientRects() {
+@@ -3369,6 +3393,16 @@ DOMRectList* Element::getClientRects() {
      GetDocument().AdjustRectForScrollAndAbsoluteZoom(rect,
                                                       *element_layout_object);
    }
@@ -108,7 +108,7 @@ index ed791a4727..83a0712374 100644
    return MakeGarbageCollected<DOMRectList>(rects);
  }
  
-@@ -3289,8 +3323,13 @@ gfx::RectF Element::GetBoundingClientRectNoLifecycleUpdate() const {
+@@ -3455,8 +3489,13 @@ gfx::RectF Element::GetBoundingClientRectNoLifecycleUpdate() const {
    DCHECK(element_layout_object);
    GetDocument().AdjustRectForScrollAndAbsoluteZoom(result,
                                                     *element_layout_object);
@@ -125,20 +125,20 @@ index ed791a4727..83a0712374 100644
    return result;
  }
 diff --git a/third_party/blink/renderer/core/dom/element.h b/third_party/blink/renderer/core/dom/element.h
-index 751e98df12..c4bb82c6f5 100644
+index 8215544d1d8ec407a4295f8adb93bed779445105..256ca021a1d2cb2193f880abe7c338ac507d9a19 100644
 --- a/third_party/blink/renderer/core/dom/element.h
 +++ b/third_party/blink/renderer/core/dom/element.h
-@@ -589,6 +589,8 @@ class CORE_EXPORT Element : public ContainerNode, public Animatable {
+@@ -646,6 +646,8 @@ class CORE_EXPORT Element : public ContainerNode {
    // TODO(crbug.com/41417572): This method should replace the above method.
    gfx::Rect VisibleBoundsRespectingClipsInLocalRoot() const;
  
 +  bool ShouldSkipClientRectsOffset() const;
 +
    DOMRectList* getClientRects();
-   // Returns a list of clients Rects in zoomed pixel units.
-   Vector<gfx::RectF> GetClientRectsNoAdjustment();
+   HeapVector<Member<DOMQuad>> getBoxQuads(const BoxQuadOptions* options,
+                                           ExceptionState&) const;
 diff --git a/third_party/blink/renderer/core/dom/range.cc b/third_party/blink/renderer/core/dom/range.cc
-index e21e368829..af383d7c44 100644
+index 28043e2f4662e8b732ce84151185586b043c9777..4e5111cde99e38c27dd3615ca708bd951e1aea38 100644
 --- a/third_party/blink/renderer/core/dom/range.cc
 +++ b/third_party/blink/renderer/core/dom/range.cc
 @@ -23,6 +23,8 @@
@@ -150,7 +150,7 @@ index e21e368829..af383d7c44 100644
  #include "third_party/blink/renderer/core/dom/range.h"
  
  #include "third_party/blink/renderer/core/display_lock/display_lock_document_state.h"
-@@ -1654,9 +1656,12 @@ DOMRectList* Range::getClientRects() const {
+@@ -1689,9 +1691,12 @@ DOMRectList* Range::getClientRects() const {
    Vector<gfx::QuadF> quads;
    GetBorderAndTextQuads(quads);
  
@@ -165,7 +165,7 @@ index e21e368829..af383d7c44 100644
      }
    }
  
-@@ -1668,8 +1673,11 @@ DOMRect* Range::getBoundingClientRect() const {
+@@ -1703,8 +1708,11 @@ DOMRect* Range::getBoundingClientRect() const {
    // impact is understood.
    SyncScrollAttemptHeuristic::DidAccessScrollOffset();
    auto rect = BoundingRect();
@@ -180,7 +180,7 @@ index e21e368829..af383d7c44 100644
    return DOMRect::FromRectF(rect);
  }
 diff --git a/ui/gfx/geometry/quad_f.cc b/ui/gfx/geometry/quad_f.cc
-index b6306c2cc5..da400b46f5 100644
+index b6306c2cc51fb2096a3415fae5a52f25e8a10e61..da400b46f5c459e627b49499c208f63f5291d679 100644
 --- a/ui/gfx/geometry/quad_f.cc
 +++ b/ui/gfx/geometry/quad_f.cc
 @@ -137,6 +137,22 @@ void QuadF::Scale(float x_scale, float y_scale) {
@@ -207,7 +207,7 @@ index b6306c2cc5..da400b46f5 100644
    p1_ += rhs;
    p2_ += rhs;
 diff --git a/ui/gfx/geometry/quad_f.h b/ui/gfx/geometry/quad_f.h
-index c9d21e3519..7742aaf590 100644
+index c9d21e3519f7b1872778133d8b952165a872e768..7742aaf590cf3f4050355d039b798b2bd89ee223 100644
 --- a/ui/gfx/geometry/quad_f.h
 +++ b/ui/gfx/geometry/quad_f.h
 @@ -106,6 +106,11 @@ class COMPONENT_EXPORT(GEOMETRY) QuadF {

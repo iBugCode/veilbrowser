@@ -57,6 +57,24 @@ def _init_ugc_imports(ugc_win: Path) -> None:
     globals()['get_logger'] = get_logger
 
 
+def _unpack_tarball(cache: Path, source_tree: Path) -> None:
+    """Extracts the hash-verified chromium-*.tar.xz with bsdtar.
+
+    7-Zip aborts on the full tarball's chained symlinks (linux sysroots under
+    third_party/llvm-build-tools) — they are useless for a Windows build and
+    are excluded; bsdtar (C:\\Windows\\System32\\tar.exe) handles the rest.
+    Requires the tarball ini's strip_leading_dirs layout (chromium-<ver>/...).
+    """
+    archives = sorted(cache.glob('chromium-*.tar.xz'))
+    if len(archives) != 1:
+        raise RuntimeError('expected one chromium tarball in %s' % cache)
+    cmd = ['tar.exe', '-xJf', str(archives[0]),
+           '--strip-components=1', '-C', str(source_tree),
+           '--exclude=third_party/llvm-build-tools/*sysroot*',
+           '--exclude=third_party/llvm-build-tools/*_sysroot']
+    subprocess.run(cmd, check=True)
+
+
 def _get_vcvars_path(name='64'):
     """Returns the path to the corresponding vcvars*.bat path."""
     vswhere_exe = '%ProgramFiles(x86)%\\Microsoft Visual Studio\\Installer\\vswhere.exe'
@@ -163,11 +181,11 @@ def main():
         source_tree.mkdir(parents=True, exist_ok=True)
         downloads_cache.mkdir(parents=True, exist_ok=True)
 
-        # Official chromium tarball. Use the veilbrowser downloads.ini (FULL
-        # tarball): the -lite tarball ungoogled ships is cut from a slightly
-        # different snapshot (newer v8) that the fingerprint patches don't
-        # match. downloads.py resolves %(_chromium_version)s from the
-        # ungoogled clone's chromium_version.txt.
+        # Official chromium tarball: download + sha512 check via downloads.py
+        # (our kernel-patches/downloads.ini points at the FULL tarball — the
+        # -lite tarball ungoogled ships is cut from a different snapshot that
+        # the fingerprint patches don't match), then unpack with bsdtar: 7z
+        # refuses the full tarball's chained symlinks in the linux sysroots.
         get_logger().info('Downloading chromium tarball...')
         source_ini = kernel_patches / 'downloads.ini'
         if not source_ini.exists():
@@ -179,10 +197,7 @@ def main():
         except downloads.HashMismatchError as exc:
             get_logger().error('File checksum does not match: %s', exc)
             return 1
-
-        get_logger().info('Unpacking chromium tarball...')
-        downloads.unpack_downloads(download_info, downloads_cache, None,
-                                   source_tree, extractors)
+        _unpack_tarball(downloads_cache, source_tree)
 
         get_logger().info('Downloading toolchain (LLVM, rust, git, ninja, node)...')
         download_info_win = downloads.DownloadInfo([ugc_win / 'downloads.ini'])

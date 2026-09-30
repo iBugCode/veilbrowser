@@ -1,8 +1,8 @@
 diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
-index f83dec6c29..e366476291 100644
+index 458209f75bd4907b3ae7e301512d0f0e43db1ec5..48223b893705e92dd3f5f84b1d749bc71f84cc7f 100644
 --- a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
 +++ b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
-@@ -13,6 +13,7 @@
+@@ -14,6 +14,7 @@
  
  #include "base/check.h"
  #include "base/check_op.h"
@@ -10,15 +10,15 @@ index f83dec6c29..e366476291 100644
  #include "base/location.h"
  #include "base/memory/scoped_refptr.h"
  #include "base/memory/weak_ptr.h"
-@@ -25,6 +26,7 @@
- #include "cc/paint/paint_canvas.h"
+@@ -27,6 +28,7 @@
  #include "cc/paint/paint_flags.h"
  #include "cc/paint/paint_image.h"
+ #include "cc/paint/record_paint_canvas.h"
 +#include "components/ungoogled/ungoogled_switches.h"
  #include "components/viz/common/resources/shared_image_format_utils.h"
  #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
  #include "third_party/blink/public/common/metrics/document_update_reason.h"
-@@ -526,7 +528,11 @@ ImageData* BaseRenderingContext2D::getImageDataInternal(
+@@ -517,7 +519,11 @@ ImageData* BaseRenderingContext2D::getImageDataInternal(
            snapshot->PaintImageForCurrentFrame().GetSkImageInfo().bounds();
        DCHECK(!bounds.intersect(SkIRect::MakeXYWH(sx, sy, sw, sh)));
      }
@@ -31,7 +31,7 @@ index f83dec6c29..e366476291 100644
        StaticBitmapImage::ShuffleSubchannelColorData(image_data_pixmap.addr(), image_data_pixmap.info(), sx, sy);
      }
    }
-@@ -1181,7 +1187,10 @@ TextMetrics* BaseRenderingContext2D::measureText(const String& text) {
+@@ -1200,7 +1206,10 @@ TextMetrics* BaseRenderingContext2D::measureText(const String& text) {
        host->GetPlainTextPainter());
  
    // Scale text metrics if enabled
@@ -44,7 +44,7 @@ index f83dec6c29..e366476291 100644
        if (auto* window = DynamicTo<LocalDOMWindow>(GetTopExecutionContext())) {
          if (window->GetFrame() && window->GetFrame()->GetDocument())
 diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
-index 01593413e3..4953725b44 100644
+index 01593413e3fd4f2d65c343e6c6dd2f0cdffedc45..4953725b44219b3bbc94cf1da3fd506eb6497908 100644
 --- a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
 +++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
 @@ -32,8 +32,11 @@
@@ -74,7 +74,7 @@ index 01593413e3..4953725b44 100644
  }
  
 diff --git a/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc b/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc
-index db103dba87..b856820612 100644
+index 769b3bf7638b897cbe6e6c12289d71e40bc24b17..430ae9527b8e205c0139ac34ef8952110522bea1 100644
 --- a/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc
 +++ b/third_party/blink/renderer/platform/graphics/static_bitmap_image.cc
 @@ -4,9 +4,13 @@
@@ -91,7 +91,7 @@ index db103dba87..b856820612 100644
  #include "gpu/command_buffer/client/gles2_interface.h"
  #include "third_party/blink/renderer/platform/graphics/accelerated_static_bitmap_image.h"
  #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
-@@ -131,15 +135,12 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+@@ -133,136 +137,275 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
      return;
    }
  
@@ -113,10 +113,10 @@ index db103dba87..b856820612 100644
    }
  
    auto colorType = info.colorType();
-@@ -147,120 +148,265 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+   auto fRowBytes = info.minRowBytes(); // stride
  
    DLOG(INFO) << "BRM: ShuffleSubchannelColorData() w=" << w << " h=" << h << " colorType=" << colorType << " fRowBytes=" << fRowBytes;
- 
+-
 -  // second random number (for y/height)
 -  double shuffleY = base::RandDouble();
 -
@@ -126,7 +126,7 @@ index db103dba87..b856820612 100644
 -    int x = currentW * shuffleX, y = currentH * shuffleY;
 -
 -    // calculate randomisation amounts for each RGB component
--    uint8_t shuffleR = base::RandInt(0, 4);
+-    uint8_t shuffleR = base::RandIntInclusive(0, 4);
 -    uint8_t shuffleG = (shuffleR + x) % 4;
 -    uint8_t shuffleB = (shuffleG + y) % 4;
 -
@@ -141,13 +141,7 @@ index db103dba87..b856820612 100644
 -         g = shuffleComponent(g, UINT8_MAX-1, shuffleG);
 -         b = shuffleComponent(b, UINT8_MAX-1, shuffleB);
 -         // alpha is left unchanged
-+  auto max_pixels = (w * h) / 128;
-+  if (max_pixels > 10) {
-+    max_pixels = 10;
-+  } else if (max_pixels < 2) {
-+    max_pixels = 2;
-+  }
- 
+-
 -         *pixel = SkColorSetARGB(a, r, g, b);
 -      }
 -      break;
@@ -155,6 +149,94 @@ index db103dba87..b856820612 100644
 -      {
 -         auto *pixel = writable_addr(uint8_t, addr, fRowBytes, x, y);
 -         *pixel = shuffleComponent(*pixel, UINT8_MAX-1, shuffleB);
+-      }
+-      break;
+-      case kRGB_565_SkColorType:
+-      {
+-         auto *pixel = writable_addr(uint16_t, addr, fRowBytes, x, y);
+-         unsigned    r = SkPacked16ToR32(*pixel);
+-         unsigned    g = SkPacked16ToG32(*pixel);
+-         unsigned    b = SkPacked16ToB32(*pixel);
+-
+-         r = shuffleComponent(r, 31, shuffleR);
+-         g = shuffleComponent(g, 63, shuffleG);
+-         b = shuffleComponent(b, 31, shuffleB);
+-
+-         unsigned r16 = (r & SK_R16_MASK) << SK_R16_SHIFT;
+-         unsigned g16 = (g & SK_G16_MASK) << SK_G16_SHIFT;
+-         unsigned b16 = (b & SK_B16_MASK) << SK_B16_SHIFT;
+-
+-         *pixel = r16 | g16 | b16;
+-      }
+-      break;
+-      case kARGB_4444_SkColorType:
+-      {
+-         auto *pixel = writable_addr(uint16_t, addr, fRowBytes, x, y);
+-         auto a = SkGetPackedA4444(*pixel), r = SkGetPackedR4444(*pixel), g = SkGetPackedG4444(*pixel), b = SkGetPackedB4444(*pixel);
+-
+-         r = shuffleComponent(r, 15, shuffleR);
+-         g = shuffleComponent(g, 15, shuffleG);
+-         b = shuffleComponent(b, 15, shuffleB);
+-         // alpha is left unchanged
+-
+-         unsigned a4 = (a & 0xF) << SK_A4444_SHIFT;
+-         unsigned r4 = (r & 0xF) << SK_R4444_SHIFT;
+-         unsigned g4 = (g & 0xF) << SK_G4444_SHIFT;
+-         unsigned b4 = (b & 0xF) << SK_B4444_SHIFT;
+-
+-         *pixel = r4 | b4 | g4 | a4;
+-      }
+-      break;
+-      case kRGBA_8888_SkColorType:
+-      {
+-         auto *pixel = writable_addr(uint32_t, addr, fRowBytes, x, y);
+-         auto a = SkGetPackedA32(*pixel), r = SkGetPackedR32(*pixel), g = SkGetPackedG32(*pixel), b = SkGetPackedB32(*pixel);
+-
+-         r = shuffleComponent(r, UINT8_MAX-1, shuffleR);
+-         g = shuffleComponent(g, UINT8_MAX-1, shuffleG);
+-         b = shuffleComponent(b, UINT8_MAX-1, shuffleB);
+-         // alpha is left unchanged
+-
+-         *pixel = (a << SK_A32_SHIFT) | (r << SK_R32_SHIFT) |
+-                  (g << SK_G32_SHIFT) | (b << SK_B32_SHIFT);
+-      }
+-      break;
+-      case kBGRA_8888_SkColorType:
+-      {
+-         auto *pixel = writable_addr(uint32_t, addr, fRowBytes, x, y);
+-         auto a = SkGetPackedA32(*pixel), b = SkGetPackedR32(*pixel), g = SkGetPackedG32(*pixel), r = SkGetPackedB32(*pixel);
+-
+-         r = shuffleComponent(r, UINT8_MAX-1, shuffleR);
+-         g = shuffleComponent(g, UINT8_MAX-1, shuffleG);
+-         b = shuffleComponent(b, UINT8_MAX-1, shuffleB);
+-         // alpha is left unchanged
+-
+-         *pixel = (a << SK_BGRA_A32_SHIFT) | (r << SK_BGRA_R32_SHIFT) |
+-                  (g << SK_BGRA_G32_SHIFT) | (b << SK_BGRA_B32_SHIFT);
+-      }
+-      break;
+-      default:
+-         // the remaining formats are not expected to be used in Chromium
+-         LOG(WARNING) << "BRM: ShuffleSubchannelColorData(): Ignoring pixel format";
+-         return;
+-    }
+-
+-    // keep bisecting or reset current width/height as needed
+-    if (x == 0) {
+-       currentW = w;
+-    } else {
+-       currentW = x;
+-    }
+-    if (y == 0) {
+-       currentH = h;
+-    } else {
+-       currentH = y;
++  auto max_pixels = (w * h) / 128;
++  if (max_pixels > 10) {
++    max_pixels = 10;
++  } else if (max_pixels < 2) {
++    max_pixels = 2;
++  }
 +  int modified_pixels = 0;
 +  std::unordered_set<int> processed_rows;
 +  std::unordered_set<int> processed_cols;
@@ -406,88 +488,6 @@ index db103dba87..b856820612 100644
 +
 +        default:
 +          break;
-       }
--      break;
--      case kRGB_565_SkColorType:
--      {
--         auto *pixel = writable_addr(uint16_t, addr, fRowBytes, x, y);
--         unsigned    r = SkPacked16ToR32(*pixel);
--         unsigned    g = SkPacked16ToG32(*pixel);
--         unsigned    b = SkPacked16ToB32(*pixel);
--
--         r = shuffleComponent(r, 31, shuffleR);
--         g = shuffleComponent(g, 63, shuffleG);
--         b = shuffleComponent(b, 31, shuffleB);
--
--         unsigned r16 = (r & SK_R16_MASK) << SK_R16_SHIFT;
--         unsigned g16 = (g & SK_G16_MASK) << SK_G16_SHIFT;
--         unsigned b16 = (b & SK_B16_MASK) << SK_B16_SHIFT;
--
--         *pixel = r16 | g16 | b16;
--      }
--      break;
--      case kARGB_4444_SkColorType:
--      {
--         auto *pixel = writable_addr(uint16_t, addr, fRowBytes, x, y);
--         auto a = SkGetPackedA4444(*pixel), r = SkGetPackedR4444(*pixel), g = SkGetPackedG4444(*pixel), b = SkGetPackedB4444(*pixel);
--
--         r = shuffleComponent(r, 15, shuffleR);
--         g = shuffleComponent(g, 15, shuffleG);
--         b = shuffleComponent(b, 15, shuffleB);
--         // alpha is left unchanged
--
--         unsigned a4 = (a & 0xF) << SK_A4444_SHIFT;
--         unsigned r4 = (r & 0xF) << SK_R4444_SHIFT;
--         unsigned g4 = (g & 0xF) << SK_G4444_SHIFT;
--         unsigned b4 = (b & 0xF) << SK_B4444_SHIFT;
--
--         *pixel = r4 | b4 | g4 | a4;
--      }
--      break;
--      case kRGBA_8888_SkColorType:
--      {
--         auto *pixel = writable_addr(uint32_t, addr, fRowBytes, x, y);
--         auto a = SkGetPackedA32(*pixel), r = SkGetPackedR32(*pixel), g = SkGetPackedG32(*pixel), b = SkGetPackedB32(*pixel);
--
--         r = shuffleComponent(r, UINT8_MAX-1, shuffleR);
--         g = shuffleComponent(g, UINT8_MAX-1, shuffleG);
--         b = shuffleComponent(b, UINT8_MAX-1, shuffleB);
--         // alpha is left unchanged
--
--         *pixel = (a << SK_A32_SHIFT) | (r << SK_R32_SHIFT) |
--                  (g << SK_G32_SHIFT) | (b << SK_B32_SHIFT);
--      }
--      break;
--      case kBGRA_8888_SkColorType:
--      {
--         auto *pixel = writable_addr(uint32_t, addr, fRowBytes, x, y);
--         auto a = SkGetPackedA32(*pixel), b = SkGetPackedR32(*pixel), g = SkGetPackedG32(*pixel), r = SkGetPackedB32(*pixel);
--
--         r = shuffleComponent(r, UINT8_MAX-1, shuffleR);
--         g = shuffleComponent(g, UINT8_MAX-1, shuffleG);
--         b = shuffleComponent(b, UINT8_MAX-1, shuffleB);
--         // alpha is left unchanged
--
--         *pixel = (a << SK_BGRA_A32_SHIFT) | (r << SK_BGRA_R32_SHIFT) |
--                  (g << SK_BGRA_G32_SHIFT) | (b << SK_BGRA_B32_SHIFT);
--      }
--      break;
--      default:
--         // the remaining formats are not expected to be used in Chromium
--         LOG(WARNING) << "BRM: ShuffleSubchannelColorData(): Ignoring pixel format";
--         return;
--    }
--
--    // keep bisecting or reset current width/height as needed
--    if (x == 0) {
--       currentW = w;
--    } else {
--       currentW = x;
--    }
--    if (y == 0) {
--       currentH = h;
--    } else {
--       currentH = y;
      }
    }
  }

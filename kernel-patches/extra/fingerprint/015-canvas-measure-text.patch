@@ -1,13 +1,16 @@
 diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
-index cb65dcb..4e990f9 100644
+index 48223b893705e92dd3f5f84b1d749bc71f84cc7f..ca9944bd183e3f94d3f128dd1641c7a5c1d203f2 100644
 --- a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
 +++ b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
-@@ -1215,15 +1215,18 @@ TextMetrics* BaseRenderingContext2D::measureText(const String& text) {
-     uint32_t hash_val_x = std::hash<std::string>{}(combined_rects_x);
-      // 映射到[-0.5, 0.5]范围
-     double norm_x = (hash_val_x & 0xFFFFFFFF) / 4294967295.0 - 0.5;
--    // 使用 0.00001 作为因子 (相当于原来的 1/100000.0)
--    double noise_x = norm_x * 0.00001;
+@@ -1210,13 +1210,23 @@ TextMetrics* BaseRenderingContext2D::measureText(const String& text) {
+   if (command_line->HasSwitch(switches::kFingerprint) &&
+       (!command_line->HasSwitch(switches::kDisableSpoofing) ||
+        command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") == std::string::npos)) {
++    std::string seed_str = command_line->GetSwitchValueASCII(switches::kFingerprint);
++    std::string combined_rects_x = seed_str + "clientrects_noise_x";
++    uint32_t hash_val_x = std::hash<std::string>{}(combined_rects_x);
++     // 映射到[-0.5, 0.5]范围
++    double norm_x = (hash_val_x & 0xFFFFFFFF) / 4294967295.0 - 0.5;
 +    // TextMetrics::Shuffle multiplies by the factor, so pass a value around
 +    // 1.0 (deterministic per seed) — an absolute epsilon would collapse the
 +    // measured widths to ~0.

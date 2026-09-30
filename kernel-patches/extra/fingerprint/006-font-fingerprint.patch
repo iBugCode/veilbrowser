@@ -1,15 +1,16 @@
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
-index a674a14962..bb5bfbb5f3 100644
+index 636e2ca66182c61647f6a9608740d715a86a52a7..085386008fd907695780b8374abf449b302b23fe 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
-@@ -32,14 +32,17 @@
- #include <limits>
+@@ -35,15 +35,18 @@
  #include <memory>
  
+ #include "base/byte_size.h"
 +#include "base/command_line.h"
  #include "base/debug/alias.h"
  #include "base/feature_list.h"
  #include "base/notreached.h"
+ #include "base/numerics/safe_conversions.h"
  #include "base/strings/escape.h"
 +#include "base/strings/string_number_conversions.h"
  #include "base/system/sys_info.h"
@@ -20,7 +21,7 @@ index a674a14962..bb5bfbb5f3 100644
  #include "build/build_config.h"
  #include "skia/ext/font_utils.h"
  #include "third_party/blink/public/common/features.h"
-@@ -124,6 +127,120 @@ const FontPlatformData* FontCache::SystemFontPlatformData(
+@@ -152,6 +155,120 @@ const FontPlatformData* FontCache::SystemFontPlatformData(
  }
  #endif
  
@@ -141,7 +142,7 @@ index a674a14962..bb5bfbb5f3 100644
  const FontPlatformData* FontCache::GetFontPlatformData(
      const FontDescription& font_description,
      const FontFaceCreationParams& creation_params,
-@@ -142,6 +259,74 @@ const FontPlatformData* FontCache::GetFontPlatformData(
+@@ -165,6 +282,74 @@ const FontPlatformData* FontCache::GetFontPlatformData(
    }
  #endif
  
