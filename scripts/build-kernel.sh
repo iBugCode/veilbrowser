@@ -42,11 +42,14 @@ CLANG_FORMAT_BIN="${CLANG_FORMAT:-$(command -v clang-format || true)}"
 ESBUILD_DIR="${ESBUILD_DIR:-$(npm root -g 2>/dev/null)/esbuild}"
 
 echo "==> workdir: $WORK  (delete it yourself when done)"
-mkdir -p "$OUT" "$WORK" && cd "$WORK"
 
 # Only patches are versioned in this repository; upstream sources are
-# assembled locally and never redistributed.
-PATCHES_DIR="$(cd "$(dirname "$0")/../kernel-patches" && pwd)"
+# assembled locally and never redistributed. Resolve repo paths while the
+# caller's cwd is still current ($0 is often a relative path).
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PATCHES_DIR="$REPO_DIR/kernel-patches"
+case "$OUT" in /*) ;; *) OUT="$(pwd)/$OUT" ;; esac
+mkdir -p "$OUT" "$WORK" && cd "$WORK"
 
 # ---- 1. upstream source (official tarball, hash-verified) -------------------
 git clone --depth 1 --branch "$UGC_TAG" \
