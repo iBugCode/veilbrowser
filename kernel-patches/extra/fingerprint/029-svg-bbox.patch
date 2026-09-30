@@ -1,0 +1,35 @@
+diff --git a/third_party/blink/renderer/core/svg/svg_graphics_element.cc b/third_party/blink/renderer/core/svg/svg_graphics_element.cc
+index bd58635..1264742 100644
+--- a/third_party/blink/renderer/core/svg/svg_graphics_element.cc
++++ b/third_party/blink/renderer/core/svg/svg_graphics_element.cc
+@@ -21,6 +21,9 @@
+ 
+ #include "third_party/blink/renderer/core/svg/svg_graphics_element.h"
+ 
++#include "base/command_line.h"
++#include "components/ungoogled/ungoogled_switches.h"
++#include "third_party/blink/renderer/core/dom/document.h"
+ #include "third_party/blink/renderer/core/frame/web_feature.h"
+ #include "third_party/blink/renderer/core/layout/layout_object.h"
+ #include "third_party/blink/renderer/core/layout/svg/layout_svg_container.h"
+@@ -274,6 +277,20 @@ SVGRectTearOff* SVGGraphicsElement::getBBoxFromJavascript() {
+       UseCounter::Count(GetDocument(), WebFeature::kGetBBoxForText);
+     }
+   }
++  // veilbrowser: getBBox() must carry the same per-document offset as
++  // getBoundingClientRect()/getClientRects() -- consistency probes
++  // compare the DOMRect and SVGRect surfaces for shared noise
++  // (CloakBrowser #185).
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint) &&
++      (!command_line->HasSwitch(switches::kDisableSpoofing) ||
++       command_line->GetSwitchValueASCII(switches::kDisableSpoofing)
++           .find("clientrects") == std::string::npos) &&
++      bounding_box.width() > 0 && bounding_box.height() > 0) {
++    bounding_box.Offset(GetDocument().GetNoiseFactorX(),
++                        GetDocument().GetNoiseFactorY());
++  }
+   return SVGRectTearOff::CreateDetached(bounding_box);
+ }
+ 

@@ -1,0 +1,37 @@
+diff --git a/third_party/blink/renderer/modules/bluetooth/bluetooth.cc b/third_party/blink/renderer/modules/bluetooth/bluetooth.cc
+index 672130a..9f03b63 100644
+--- a/third_party/blink/renderer/modules/bluetooth/bluetooth.cc
++++ b/third_party/blink/renderer/modules/bluetooth/bluetooth.cc
+@@ -4,8 +4,11 @@
+ 
+ #include "third_party/blink/renderer/modules/bluetooth/bluetooth.h"
+ 
++#include <functional>
++#include <string>
+ #include <utility>
+ 
++#include "base/command_line.h"
+ #include "build/build_config.h"
+ #include "mojo/public/cpp/bindings/associated_receiver_set.h"
+ #include "mojo/public/cpp/bindings/pending_associated_remote.h"
+@@ -331,6 +334,20 @@ ScriptPromise<IDLBoolean> Bluetooth::getAvailability(
+   }
+ 
+   CHECK(window->IsSecureContext());
++
++  // veilbrowser: hosts without a Bluetooth adapter (typical headless
++  // Linux servers) always report false, contradicting the desktop
++  // persona (CloakBrowser #162). Resolve with a seed-derived
++  // availability instead of querying the host's adapter state.
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch("fingerprint")) {
++    const std::string seed = command_line->GetSwitchValueASCII(
++                                 "fingerprint") + ":bt-availability";
++    return ToResolvedPromise<IDLBoolean>(
++        script_state, std::hash<std::string>{}(seed) % 100 < 80);
++  }
++
+   EnsureServiceConnection(window);
+ 
+   // Subsequent steps are handled in the browser process.

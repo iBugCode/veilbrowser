@@ -1,0 +1,160 @@
+diff --git a/third_party/blink/renderer/platform/network/network_state_notifier.h b/third_party/blink/renderer/platform/network/network_state_notifier.h
+index 9e3d26e..98e2fd2 100644
+--- a/third_party/blink/renderer/platform/network/network_state_notifier.h
++++ b/third_party/blink/renderer/platform/network/network_state_notifier.h
+@@ -46,6 +46,16 @@
+ 
+ namespace blink {
+ 
++// veilbrowser: seed-derived plausible network-quality defaults. On hosts
++// where the NetworkQualityEstimator has no data (headless/proxied
++// launches) navigator.connection otherwise reports the spec's
++// unknown-value tell -- rtt = 0, downlink = 10 Mbps -- constant across
++// sessions and sites. Derived in network_state_notifier.cc.
++std::optional<base::TimeDelta> VeilSeededHttpRtt();
++std::optional<base::TimeDelta> VeilSeededTransportRtt();
++std::optional<double> VeilSeededDownlinkMbps();
++WebEffectiveConnectionType VeilSeededEffectiveType();
++
+ class PLATFORM_EXPORT NetworkStateNotifier {
+   USING_FAST_MALLOC(NetworkStateNotifier);
+ 
+@@ -57,11 +67,11 @@ class PLATFORM_EXPORT NetworkStateNotifier {
+     bool connection_initialized = false;
+     WebConnectionType type = kWebConnectionTypeOther;
+     double max_bandwidth_mbps = kInvalidMaxBandwidth;
+-    WebEffectiveConnectionType effective_type =
+-        WebEffectiveConnectionType::kTypeUnknown;
+-    std::optional<base::TimeDelta> http_rtt;
+-    std::optional<base::TimeDelta> transport_rtt;
+-    std::optional<double> downlink_throughput_mbps;
++    WebEffectiveConnectionType effective_type = VeilSeededEffectiveType();
++    std::optional<base::TimeDelta> http_rtt = VeilSeededHttpRtt();
++    std::optional<base::TimeDelta> transport_rtt = VeilSeededTransportRtt();
++    std::optional<double> downlink_throughput_mbps =
++        VeilSeededDownlinkMbps();
+     bool save_data = false;
+ 
+     // If set, then network quality corresponding to
+diff --git a/third_party/blink/renderer/platform/network/network_state_notifier.cc b/third_party/blink/renderer/platform/network/network_state_notifier.cc
+index ed69c14..5dda015 100644
+--- a/third_party/blink/renderer/platform/network/network_state_notifier.cc
++++ b/third_party/blink/renderer/platform/network/network_state_notifier.cc
+@@ -26,8 +26,12 @@
+ #include "third_party/blink/renderer/platform/network/network_state_notifier.h"
+ 
+ #include <array>
++#include <cstdint>
++#include <functional>
+ #include <memory>
++#include <string>
+ 
++#include "base/command_line.h"
+ #include "base/synchronization/lock.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "net/nqe/effective_connection_type.h"
+@@ -69,8 +73,60 @@ constexpr std::array<double, kNumEffectiveConnectionTypes>
+     kTypicalDownlinkMbpsEffectiveConnectionType = {0,     0,     0.040,
+                                                    0.075, 0.400, 1.600};
+ 
++// veilbrowser: with the --fingerprint switch the renderer's network
++// quality estimates are replaced with seed-derived plausible values. On
++// headless or proxied launches the estimator has no data and
++// navigator.connection then reports the spec's unknown-value tell --
++// rtt = 0, downlink = 10 Mbps -- constant across sessions and sites
++// (CloakBrowser #447).
++bool VeilFingerprintActive() {
++  static const bool active =
++      base::CommandLine::ForCurrentProcess()->HasSwitch("fingerprint");
++  return active;
++}
++
++uint64_t VeilSeedHash(const char* salt) {
++  std::string s = base::CommandLine::ForCurrentProcess()
++                      ->GetSwitchValueASCII("fingerprint");
++  s += salt;
++  return std::hash<std::string>{}(s);
++}
++
+ }  // namespace
+ 
++WebEffectiveConnectionType VeilSeededEffectiveType() {
++  if (!VeilFingerprintActive())
++    return WebEffectiveConnectionType::kTypeUnknown;
++  return WebEffectiveConnectionType::kType4G;
++}
++
++std::optional<base::TimeDelta> VeilSeededHttpRtt() {
++  if (!VeilFingerprintActive())
++    return std::nullopt;
++  return base::Milliseconds(
++      40 + static_cast<int>(VeilSeedHash(":http-rtt") % 19) * 5);
++}
++
++std::optional<base::TimeDelta> VeilSeededTransportRtt() {
++  if (!VeilFingerprintActive())
++    return std::nullopt;
++  const int http_rtt_ms =
++      40 + static_cast<int>(VeilSeedHash(":http-rtt") % 19) * 5;
++  const int transport_rtt_ms =
++      std::max(25, http_rtt_ms - 15 -
++                       static_cast<int>(VeilSeedHash(":transport-rtt") % 25));
++  return base::Milliseconds(transport_rtt_ms);
++}
++
++std::optional<double> VeilSeededDownlinkMbps() {
++  if (!VeilFingerprintActive())
++    return std::nullopt;
++  static constexpr double kVeilDownlinkMbps[] = {2.4, 3.1, 3.9,
++                                                 4.6, 5.8, 6.9, 8.4, 9.2};
++  return kVeilDownlinkMbps[VeilSeedHash(":downlink") %
++                           std::size(kVeilDownlinkMbps)];
++}
++
+ NetworkStateNotifier& GetNetworkStateNotifier() {
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(NetworkStateNotifier, network_state_notifier,
+                                   ());
+@@ -151,20 +207,29 @@ void NetworkStateNotifier::SetNetworkQuality(WebEffectiveConnectionType type,
+   {
+     base::AutoLock locker(lock_);
+ 
+-    state_.effective_type = type;
+-    state_.http_rtt = std::nullopt;
+-    state_.transport_rtt = std::nullopt;
+-    state_.downlink_throughput_mbps = std::nullopt;
+-
+-    if (http_rtt.InMilliseconds() >= 0)
+-      state_.http_rtt = http_rtt;
+-
+-    if (transport_rtt.InMilliseconds() >= 0)
+-      state_.transport_rtt = transport_rtt;
+-
+-    if (downlink_throughput_kbps >= 0) {
+-      state_.downlink_throughput_mbps =
+-          static_cast<double>(downlink_throughput_kbps) / 1000;
++    if (VeilFingerprintActive()) {
++      // veilbrowser: never let host-side estimates drift the reported
++      // quality -- keep the seed-derived values for every push.
++      state_.effective_type = VeilSeededEffectiveType();
++      state_.http_rtt = VeilSeededHttpRtt();
++      state_.transport_rtt = VeilSeededTransportRtt();
++      state_.downlink_throughput_mbps = VeilSeededDownlinkMbps();
++    } else {
++      state_.effective_type = type;
++      state_.http_rtt = std::nullopt;
++      state_.transport_rtt = std::nullopt;
++      state_.downlink_throughput_mbps = std::nullopt;
++
++      if (http_rtt.InMilliseconds() >= 0)
++        state_.http_rtt = http_rtt;
++
++      if (transport_rtt.InMilliseconds() >= 0)
++        state_.transport_rtt = transport_rtt;
++
++      if (downlink_throughput_kbps >= 0) {
++        state_.downlink_throughput_mbps =
++            static_cast<double>(downlink_throughput_kbps) / 1000;
++      }
+     }
+   }
+ }

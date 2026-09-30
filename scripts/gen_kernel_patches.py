@@ -6,6 +6,12 @@ Diffs the live Chromium build tree against the pre-edit snapshots taken in
 patches stack on top of the existing ones. Also refreshes 015 (measureText
 Shuffle factor fix) whose upstream pristine is reconstructed inline.
 
+NOTE: the speech_synthesis.cc section of 024 is maintained by hand since
+v0.9.1 (host-voice replacement, camoufox #717) — regenerating 024 from a
+stale v0.9.0-era pristine snapshot would silently revert it. Re-diff that
+file against upstream by hand. 028-030 are hand-written (no generator
+entries).
+
 Usage: python3 scripts/gen_kernel_patches.py [--tree <checkout>]
 """
 from __future__ import annotations

@@ -142,7 +142,7 @@ index ef1c723..8fe188a 100644
    estimate->setUsage(usage_in_bytes);
    estimate->setQuota(quota_in_bytes);
 diff --git a/third_party/blink/renderer/modules/speech/speech_synthesis.cc b/third_party/blink/renderer/modules/speech/speech_synthesis.cc
-index 891a815..c54a623 100644
+index 891a815..c283dae 100644
 --- a/third_party/blink/renderer/modules/speech/speech_synthesis.cc
 +++ b/third_party/blink/renderer/modules/speech/speech_synthesis.cc
 @@ -25,6 +25,9 @@
@@ -155,17 +155,19 @@ index 891a815..c54a623 100644
  #include <tuple>
  
  #include "build/build_config.h"
-@@ -84,6 +87,49 @@ SpeechSynthesis::SpeechSynthesis(LocalDOMWindow& window)
+@@ -84,6 +87,54 @@ SpeechSynthesis::SpeechSynthesis(LocalDOMWindow& window)
  
  void SpeechSynthesis::OnSetVoiceList(
      Vector<mojom::blink::SpeechSynthesisVoicePtr> mojom_voices) {
 +  // veilbrowser: hosts without a platform TTS engine (typical Linux
-+  // servers) report zero voices, itself a headless tell. Synthesize the
-+  // stock voice list of the spoofed platform instead.
++  // servers) report zero voices, itself a headless tell; and a host
++  // that does have voices (e.g. speech-dispatcher) leaks the real OS
++  // into a windows/macos persona. Synthesize the stock voice list of
++  // the spoofed platform instead (camoufox #717).
 +  {
 +    const base::CommandLine* command_line =
 +        base::CommandLine::ForCurrentProcess();
-+    if (command_line->HasSwitch("fingerprint") && mojom_voices.empty()) {
++    if (command_line->HasSwitch("fingerprint")) {
 +      struct VeilVoice {
 +        const char* name;
 +        const char* lang;
@@ -191,14 +193,17 @@ index 891a815..c54a623 100644
 +        voices = kMacOSVoices;
 +        voice_count = std::size(kMacOSVoices);
 +      }
-+      for (size_t i = 0; voices && i < voice_count; ++i) {
-+        auto voice = mojom::blink::SpeechSynthesisVoice::New();
-+        voice->voice_uri = voices[i].name;
-+        voice->name = voices[i].name;
-+        voice->lang = voices[i].lang;
-+        voice->is_local_service = true;
-+        voice->is_default = (i == 0);
-+        mojom_voices.push_back(std::move(voice));
++      if (voices) {
++        mojom_voices.clear();
++        for (size_t i = 0; i < voice_count; ++i) {
++          auto voice = mojom::blink::SpeechSynthesisVoice::New();
++          voice->voice_uri = voices[i].name;
++          voice->name = voices[i].name;
++          voice->lang = voices[i].lang;
++          voice->is_local_service = true;
++          voice->is_default = (i == 0);
++          mojom_voices.push_back(std::move(voice));
++        }
 +      }
 +    }
 +  }
