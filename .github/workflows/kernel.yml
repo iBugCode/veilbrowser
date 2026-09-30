@@ -89,6 +89,16 @@ jobs:
             ..\ungoogled-chromium-windows
       - name: Python deps
         run: pip install httplib2==0.22.0
+      - name: Install the Windows SDK that VS on the image expects
+        run: |
+          Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Include" | Select-Object -ExpandProperty Name
+          winget install --id Microsoft.WindowsSDK.10.0.28000 -e --silent `
+            --accept-package-agreements --accept-source-agreements
+          if (Test-Path "C:\Program Files (x86)\Windows Kits\10\Include\10.0.28000.0") {
+            "SDK 10.0.28000.0 installed"
+          } else {
+            "WARNING: SDK 10.0.28000.0 still missing" | Out-Host
+          }
       - name: Build kernel (win-x64)
         env:
           VEIL_GN_EXTRA: 'use_thin_lto=false'

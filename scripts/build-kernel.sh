@@ -119,6 +119,11 @@ CLANG_BIN="$PWD/src/third_party/llvm-build/Release+Asserts/bin"
 export CC="$CLANG_BIN/clang"
 export CXX="$CLANG_BIN/clang++"
 
+# gn's exec_script helpers call the in-tree cpython3 (a DEPS hook product
+# that a tarball build doesn't have) — point it at the system python3.
+mkdir -p src/third_party/cpython3/host/bin
+ln -sf "$(command -v python3)" src/third_party/cpython3/host/bin/python3
+
 # ---- 5. build (official; ThinLTO unless disabled) ----------------------------
 mkdir -p src/out/Default
 cp "$PATCHES_DIR/flags.gn" src/out/Default/args.gn
