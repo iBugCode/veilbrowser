@@ -51,11 +51,20 @@ PATCHES_DIR="$REPO_DIR/kernel-patches"
 case "$OUT" in /*) ;; *) OUT="$(pwd)/$OUT" ;; esac
 mkdir -p "$OUT" "$WORK" && cd "$WORK"
 
-# ---- 1. upstream source (official tarball, hash-verified) -------------------
+# ---- 1. upstream source (official FULL tarball, hash-verified) --------------
 git clone --depth 1 --branch "$UGC_TAG" \
     https://github.com/ungoogled-software/ungoogled-chromium.git ugc
-python3 ugc/utils/downloads.py retrieve -i ugc/downloads.ini -c download_cache
-python3 ugc/utils/downloads.py unpack -i ugc/downloads.ini -c download_cache src
+mkdir -p download_cache src
+python3 ugc/utils/downloads.py retrieve -i "$PATCHES_DIR/downloads.ini" -c download_cache
+python3 - ugc/utils "$PATCHES_DIR/downloads.ini" <<'EOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import downloads
+info = downloads.DownloadInfo([sys.argv[2]])
+downloads.check_downloads(info, "download_cache", None)
+print("==> tarball hash OK")
+EOF
+python3 ugc/utils/downloads.py unpack -i "$PATCHES_DIR/downloads.ini" -c download_cache src
 
 # ---- 2. prune + ungoogled patches -------------------------------------------
 python3 ugc/utils/prune_binaries.py src "$PATCHES_DIR/pruning.list"

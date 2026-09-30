@@ -163,10 +163,16 @@ def main():
         source_tree.mkdir(parents=True, exist_ok=True)
         downloads_cache.mkdir(parents=True, exist_ok=True)
 
-        # Official chromium tarball via the ungoogled downloads.ini (hashed)
+        # Official chromium tarball. Use the veilbrowser downloads.ini (FULL
+        # tarball): the -lite tarball ungoogled ships is cut from a slightly
+        # different snapshot (newer v8) that the fingerprint patches don't
+        # match. downloads.py resolves %(_chromium_version)s from the
+        # ungoogled clone's chromium_version.txt.
         get_logger().info('Downloading chromium tarball...')
-        download_info = downloads.DownloadInfo(
-            [ugc_win / 'ungoogled-chromium' / 'downloads.ini'])
+        source_ini = kernel_patches / 'downloads.ini'
+        if not source_ini.exists():
+            source_ini = ugc_win / 'ungoogled-chromium' / 'downloads.ini'
+        download_info = downloads.DownloadInfo([source_ini])
         downloads.retrieve_downloads(download_info, downloads_cache, None, True)
         try:
             downloads.check_downloads(download_info, downloads_cache, None)
