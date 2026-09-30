@@ -115,6 +115,16 @@ ln -sf "${CLANG_FORMAT_BIN:-clang-format}" src/buildtools/linux64-format/clang-f
 rm -rf src/third_party/devtools-frontend/src/node_modules/esbuild
 ln -s "$ESBUILD_DIR" src/third_party/devtools-frontend/src/node_modules/esbuild
 
+# TypeScript Native Preview (tsgo) — DEPS fetches third_party/typescript/
+# linux-amd64/src from CIPD; unpack the upstream release instead. Keep
+# TS_VERSION in sync with the chromium DEPS entry (version:2@<ts>).
+TS_VERSION="${TS_VERSION:-7.0.2}"
+curl -sSL -o download_cache/typescript-linux-x64.tgz \
+    "https://github.com/microsoft/TypeScript/releases/download/v${TS_VERSION}/typescript-linux-x64.tgz"
+mkdir -p src/third_party/typescript/linux-amd64/src
+tar xzf download_cache/typescript-linux-x64.tgz \
+    -C src/third_party/typescript/linux-amd64/src --strip-components=1
+
 CLANG_BIN="$PWD/src/third_party/llvm-build/Release+Asserts/bin"
 export CC="$CLANG_BIN/clang"
 export CXX="$CLANG_BIN/clang++"
