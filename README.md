@@ -103,6 +103,17 @@ components are used** — no proprietary code is included or derived (see
   fallback users hit with authenticated SOCKS5 (`browser.proxy_check`).
 - **CDP hygiene**: sessions never call `Runtime.enable` (published
   DevTools-detection trick), verified by a console-getter probe test.
+- **Normal-install extensions** (`--extension_paths=dir1,dir2`, kernel
+  patch 027): installs unpacked extensions into the profile exactly like the
+  chrome://extensions "Load unpacked" flow — `chrome.runtime.onInstalled`
+  fires with reason `"install"` only the **first** launch into a profile,
+  reason `"update"` only when the on-disk version changes, and restarts load
+  it from prefs with **no event**.  `--load-extension` instead re-runs the
+  whole install flow on every launch, so its `onInstalled` fires every time
+  (a loud automation tell).  Installations via this switch are also immune
+  to the developer-mode disable gate: the flow flips the (persistent)
+  developer-mode pref before policy evaluation and re-arms on every launch —
+  no expiry, no silent disabling.
 - **Fingerprint self-check** (`veilbrowser check`) and one-command kernel
   upgrade with sha256 verification.
 

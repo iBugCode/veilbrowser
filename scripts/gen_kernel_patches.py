@@ -51,6 +51,14 @@ PATCHES = {
         ("local_dom_window.cc",
          "third_party/blink/renderer/core/frame/local_dom_window.cc"),
     ],
+    "027-extension-paths.patch": [
+        ("switches_upstream.h", "extensions/common/switches.h"),
+        ("switches_upstream.cc", "extensions/common/switches.cc"),
+        ("extension_service_upstream.h",
+         "chrome/browser/extensions/extension_service.h"),
+        ("extension_service_upstream.cc",
+         "chrome/browser/extensions/extension_service.cc"),
+    ],
 }
 
 

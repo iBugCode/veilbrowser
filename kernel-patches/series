@@ -136,3 +136,4 @@ extra/fingerprint/023-embedded-fonts.patch
 extra/fingerprint/024-desktop-env.patch
 extra/fingerprint/025-webgl-limits.patch
 extra/fingerprint/026-window-dpr.patch
+extra/fingerprint/027-extension-paths.patch
