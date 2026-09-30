@@ -124,6 +124,51 @@ curl -sSL -o download_cache/typescript-linux-x64.tgz \
 mkdir -p src/third_party/typescript/linux-amd64/src
 tar xzf download_cache/typescript-linux-x64.tgz \
     -C src/third_party/typescript/linux-amd64/src --strip-components=1
+# The CIPD package is pre-patched with Chromium's lib.dom.d.ts adjustments
+# (TrustedHTML/TrustedScriptURL setters); the upstream release is not. Same
+# fix as ungoogled-chromium-windows' windows-fix-typescript-lib-dom.patch.
+python3 - src/third_party/typescript/linux-amd64/src/lib/lib.dom.d.ts <<'EOF'
+import re
+import sys
+
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+
+
+def after_mdn(s, mdn_url):
+    """Return a replace() targeting the declaration following an MDN comment."""
+    anchor = "     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/%s)\n     */\n" % mdn_url
+    assert s.count(anchor) == 1, mdn_url
+    return anchor
+
+
+subs = [
+    ("Element/innerHTML", "    innerHTML: string;\n",
+     "    // Chromium modification to work around\n"
+     "    // https://github.com/microsoft/TypeScript/issues/30024.\n"
+     "    get innerHTML(): string;\n"
+     "    set innerHTML(html: string|TrustedHTML);\n"),
+    ("ShadowRoot/innerHTML", "    innerHTML: string;\n",
+     "    // Chromium modification to work around\n"
+     "    // https://github.com/microsoft/TypeScript/issues/30024.\n"
+     "    get innerHTML(): string;\n"
+     "    set innerHTML(html: string|TrustedHTML);\n"),
+    ("HTMLScriptElement/src", "    src: string;\n",
+     "    // Chromium modification to work around\n"
+     "    // https://github.com/microsoft/TypeScript/issues/30024.\n"
+     "    get src(): string;\n"
+     "    set src(url: string|TrustedScriptURL);\n"),
+    ('HTMLElement/hidden', '    hidden: boolean | "until-found";\n',
+     "    // Chromium modification since a lot of errors are thrown when `hidden` is boolean|\"until-found\"\n"
+     "    hidden: boolean;\n"),
+]
+for mdn, old, new in subs:
+    anchor = after_mdn(s, mdn)
+    assert anchor + old in s, mdn
+    s = s.replace(anchor + old, anchor + new)
+open(p, 'w', encoding='utf-8').write(s)
+print("lib.dom.d.ts patched (4 Chromium adjustments)")
+EOF
 
 CLANG_BIN="$PWD/src/third_party/llvm-build/Release+Asserts/bin"
 export CC="$CLANG_BIN/clang"

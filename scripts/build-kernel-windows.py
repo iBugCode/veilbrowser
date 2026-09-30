@@ -270,6 +270,15 @@ def main():
     # (including INSTALLED_VERSION), so test for the actual compiler, not the
     # marker file — upstream's check silently skipped the copy on full trees.
     if not (RUST_DIR_DST / 'bin' / 'rustc.exe').exists():
+        # A blanket */bin/* glob also copies rustc-codegen-cranelift-preview's
+        # rustc wrapper, which (alphabetically after rustc/) overwrites the
+        # real rustc.exe with a non-PE script — WinError 193 at rust-std
+        # build time. Only the compiler/cargo/tool libs are needed.
+        SKIP_COMPONENTS = {
+            'rustc-codegen-cranelift-preview', 'rustfmt-preview',
+            'clippy-preview', 'miri-preview', 'rust-analyzer-preview',
+            'llvm-tools-preview', 'rust-docs', 'rust-docs-json-preview',
+        }
         for rust_dir_src in ('rust-toolchain-x64', 'rust-toolchain-x86', 'rust-toolchain-arm'):
             src_dir = source_tree / 'third_party' / rust_dir_src
             for dir_to_copy in ('bin', 'lib'):
@@ -278,12 +287,18 @@ def main():
                 target_dir = RUST_DIR_DST / dir_to_copy
                 if not target_dir.exists():
                     os.makedirs(target_dir)
-                for cp_src in src_dir.glob('*/{0}/*'.format(dir_to_copy)):
-                    cp_dst = target_dir / cp_src.name
-                    if cp_src.is_dir():
-                        shutil.copytree(cp_src, cp_dst, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(cp_src, cp_dst)
+                for comp in src_dir.iterdir():
+                    if not comp.is_dir() or comp.name in SKIP_COMPONENTS:
+                        continue
+                    comp_bin = comp / dir_to_copy
+                    if not comp_bin.is_dir():
+                        continue
+                    for cp_src in comp_bin.iterdir():
+                        cp_dst = target_dir / cp_src.name
+                        if cp_src.is_dir():
+                            shutil.copytree(cp_src, cp_dst, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(cp_src, cp_dst)
         with open(RUST_FLAG_FILE, 'w') as f:
             subprocess.run([str(source_tree / 'third_party' / 'rust-toolchain-x64'
                                 / 'rustc' / 'bin' / 'rustc.exe'), '--version'], stdout=f)
