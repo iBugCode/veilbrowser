@@ -50,7 +50,7 @@ jobs:
             patch ninja-build gperf golang-go clang-format bzip2 xz-utils
           # devtools-frontend needs the chromium-pinned node (third_party/node/update_node_binaries)
           curl -sSL -o /tmp/node.tar.xz \
-            https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz
+            https://nodejs.org/dist/v24.12.0/node-v24.12.0-linux-x64.tar.xz
           sudo mkdir -p /usr/local/node
           sudo tar xf /tmp/node.tar.xz -C /usr/local/node --strip-components=1
           echo /usr/local/node/bin >> "$GITHUB_PATH"
