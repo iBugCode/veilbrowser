@@ -69,42 +69,52 @@ jobs:
   windows:
     if: github.event_name == 'push' ||
         inputs.platforms == 'both' || inputs.platforms == 'windows'
-    runs-on: windows-2025
+    # Cross-compiled from Linux: the 4-core windows runners cannot finish a
+    # Chromium win build inside the job cap (~13.6 h measured), while the
+    # same graph compiles ~3x faster on ubuntu. Chromium supports linux-host
+    # win cross builds natively (clang-cl/lld-link/llvm-ml are host tools,
+    # MIDL outputs are pregenerated, rc ships a linux64 binary); the MSVC/SDK
+    # headers+libs come from Microsoft's public VS manifests via
+    # scripts/vendor/msvc-wine/vsdownload.py, laid out on an ext4 casefold
+    # loop mount (SDK headers rely on case-insensitive include lookup).
+    runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Enable long paths (Chromium sources exceed MAX_PATH)
+      - name: Free disk space (Chromium needs ~50 GB)
         run: |
-          git config --system core.longpaths true
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" `
-            /v LongPathsEnabled /t REG_DWORD /d 1 /f
-      - name: Fetch ungoogled-chromium-windows at the pinned tag
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghc /usr/share/swift /usr/local/share/boost \
+            /usr/lib/jvm /opt/hostedtoolcache/Code.Server || true
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h /
+      - name: Install build prerequisites
         run: |
-          git clone --depth 1 --branch 153.0.8010.52-1.1 `
-            --recurse-submodules --shallow-submodules `
-            https://github.com/ungoogled-software/ungoogled-chromium-windows `
-            ..\ungoogled-chromium-windows
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            patch ninja-build gperf golang-go clang-format bzip2 xz-utils \
+            msitools cabextract e2fsprogs p7zip-full
+          # devtools-frontend needs the chromium-pinned node (third_party/node/update_node_binaries)
+          curl -sSL -o /tmp/node.tar.xz \
+            https://nodejs.org/dist/v24.12.0/node-v24.12.0-linux-x64.tar.xz
+          sudo mkdir -p /usr/local/node
+          sudo tar xf /tmp/node.tar.xz -C /usr/local/node --strip-components=1
+          echo /usr/local/node/bin >> "$GITHUB_PATH"
+          sudo /usr/local/node/bin/npm install -g esbuild
       - name: Python deps
         run: pip install httplib2==0.22.0
-      - name: Install the Windows SDK that VS on the image expects
+      - name: Fetch ungoogled-chromium-windows at the pinned tag
         run: |
-          Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Include" | Select-Object -ExpandProperty Name
-          winget install --id Microsoft.WindowsSDK.10.0.28000 -e --silent `
-            --accept-package-agreements --accept-source-agreements
-          if (Test-Path "C:\Program Files (x86)\Windows Kits\10\Include\10.0.28000.0") {
-            "SDK 10.0.28000.0 installed"
-          } else {
-            "WARNING: SDK 10.0.28000.0 still missing" | Out-Host
-          }
-      - name: Build kernel (win-x64)
+          git clone --depth 1 --branch 153.0.8010.52-1.1 \
+            --recurse-submodules --shallow-submodules \
+            https://github.com/ungoogled-software/ungoogled-chromium-windows \
+            ../ungoogled-chromium-windows
+      - name: Build kernel (win-x64, cross-compiled from linux)
         env:
           VEIL_GN_EXTRA: 'use_thin_lto=false'
         run: >
-          python scripts/build-kernel-windows.py
-          --ugc-win ..\ungoogled-chromium-windows
+          python3 scripts/build-kernel-windows-cross.py
+          --ugc-win ../ungoogled-chromium-windows
           --kernel-patches kernel-patches
           --out dist
       - name: Upload kernel artifact
