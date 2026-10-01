@@ -323,6 +323,16 @@ def main():
     if not os.path.exists(r'third_party\rust-toolchain\bin\bindgen.exe'):
         _run_build_process(sys.executable, r'tools\rust\build_bindgen.py', '--skip-test')
 
+    # Diagnostic: what actually landed in rust-toolchain/bin?
+    bindir = source_tree / 'third_party' / 'rust-toolchain' / 'bin'
+    if bindir.is_dir():
+        for f in sorted(bindir.iterdir()):
+            if f.is_file():
+                with open(f, 'rb') as fh:
+                    head = fh.read(2)
+                get_logger().info('RUSTBIN %s size=%d head=%r', f.name,
+                                  f.stat().st_size, head)
+
     ninja = [r'third_party\ninja\ninja.exe']
     if args.thread_count:
         ninja += ['-j', str(args.thread_count)]
