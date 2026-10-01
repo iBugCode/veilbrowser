@@ -59,8 +59,9 @@ def _init_ugc_imports(ugc_win: Path) -> None:
 
 def _retrieve_with_retry(download_info, downloads_cache, attempts=3):
     """retrieve + hash-check, retrying transient download failures (the
-    bison/sourceforge mirrors occasionally 522). Cached files are skipped
-    on re-run, so a retry only fetches what is missing."""
+    bison/sourceforge mirrors occasionally 522 or serve a corrupt body).
+    Cached files are skipped on re-run, so a hash-mismatch retry purges the
+    bad file first; a retry only fetches what is missing."""
     for attempt in range(1, attempts + 1):
         try:
             downloads.retrieve_downloads(download_info, downloads_cache, None, True)
@@ -72,8 +73,14 @@ def _retrieve_with_retry(download_info, downloads_cache, attempts=3):
             get_logger().warning('download attempt %d failed (%s), retrying',
                                  attempt, exc)
         except downloads.HashMismatchError as exc:
-            get_logger().error('File checksum does not match: %s', exc)
-            raise
+            if attempt == attempts:
+                get_logger().error('File checksum does not match: %s', exc)
+                raise
+            bad = Path(str(exc))
+            if bad.exists():
+                bad.unlink()
+            get_logger().warning('hash mismatch on attempt %d for %s — purged, retrying',
+                                 attempt, bad.name)
 
 
 def _unpack_tarball(cache: Path, source_tree: Path) -> None:
