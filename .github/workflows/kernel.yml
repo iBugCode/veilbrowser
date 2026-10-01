@@ -93,7 +93,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             patch ninja-build gperf golang-go clang-format bzip2 xz-utils \
-            msitools cabextract e2fsprogs p7zip-full
+            msitools cabextract e2fsprogs p7zip-full libnss3-dev
           # devtools-frontend needs the chromium-pinned node (third_party/node/update_node_binaries)
           curl -sSL -o /tmp/node.tar.xz \
             https://nodejs.org/dist/v24.12.0/node-v24.12.0-linux-x64.tar.xz
