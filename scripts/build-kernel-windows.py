@@ -275,9 +275,9 @@ def main():
         # real rustc.exe with a non-PE script — WinError 193 at rust-std
         # build time. Only the compiler/cargo/tool libs are needed.
         SKIP_COMPONENTS = {
-            'rustc-codegen-cranelift-preview', 'rustfmt-preview',
-            'clippy-preview', 'miri-preview', 'rust-analyzer-preview',
-            'llvm-tools-preview', 'rust-docs', 'rust-docs-json-preview',
+            'rustc-codegen-cranelift-preview', 'clippy-preview',
+            'miri-preview', 'rust-analyzer-preview', 'llvm-tools-preview',
+            'rust-docs', 'rust-docs-json-preview',
         }
         for rust_dir_src in ('rust-toolchain-x64', 'rust-toolchain-x86', 'rust-toolchain-arm'):
             src_dir = source_tree / 'third_party' / rust_dir_src
