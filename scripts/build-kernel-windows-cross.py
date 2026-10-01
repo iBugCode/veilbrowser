@@ -273,6 +273,48 @@ def _patch_sdkddkver(sdk_root: Path) -> None:
         sdkddk.write_text(text, encoding='utf-8')
 
 
+
+def _fix_rc_wrapper(source_tree: Path) -> None:
+    """The windows patch series makes tool_wrapper.py's rc wrapper refuse
+    non-Windows hosts (their fix routes .rc straight to rc.exe). Restore
+    upstream's behaviour on other hosts: the pure-python rc compiler in
+    build/toolchain/win/rc/, which exists precisely for linux cross builds.
+    Idempotent; applied on every run."""
+    tw = source_tree / 'build' / 'toolchain' / 'win' / 'tool_wrapper.py'
+    text = tw.read_text(encoding='utf-8')
+    broken = ("        if sys.platform == 'win32':\n"
+              "            rc_exe_exit_code = subprocess.call(args, shell=True, env=env)\n"
+              "            return rc_exe_exit_code\n"
+              "        else:\n"
+              "            raise RuntimeError('Must run on Windows.')")
+    fixed = ("        if sys.platform == 'win32':\n"
+             "            rc_exe_exit_code = subprocess.call(args, shell=True, env=env)\n"
+             "            return rc_exe_exit_code\n"
+             "        rcpy_args = args[:]\n"
+             "        rcpy_args[0:1] = [sys.executable, os.path.join(BASE_DIR, 'rc', 'rc.py')]\n"
+             "        rcpy_args.append('/showIncludes')\n"
+             "        return subprocess.call(rcpy_args, env=env)")
+    if broken in text:
+        tw.write_text(text.replace(broken, fixed), encoding='utf-8')
+
+
+def _ensure_linux_rc_binary(source_tree: Path) -> None:
+    """Fetch the prebuilt linux64 resource compiler from the
+    chromium-browser-clang/rc bucket (the DEPS 'rc_linux' hook does this for
+    gclient checkouts; a tarball tree only carries the .sha1 marker).
+    Idempotent."""
+    rc_dir = source_tree / 'build' / 'toolchain' / 'win' / 'rc' / 'linux64'
+    rc_bin = rc_dir / 'rc'
+    if rc_bin.exists():
+        return
+    sha1 = (rc_dir / 'rc.sha1').read_text(encoding='utf-8').strip()
+    url = f'{_CDS_URL}/rc/{sha1}'
+    get_logger().info('Fetching %s', url)
+    with urllib.request.urlopen(url) as resp:
+        rc_bin.write_bytes(resp.read())
+    rc_bin.chmod(0o755)
+
+
 def _provision_msvc_sdk(sdk_root: Path, cache_dir: Path) -> None:
     """Fetch MSVC+SDK via vsdownload.py and lay it out on a casefold mount.
 
@@ -523,6 +565,8 @@ def main():
 
     # ---- MSVC/SDK on the casefold mount ------------------------------------
     _patch_tree_for_cross_sdk(source_tree)
+    _fix_rc_wrapper(source_tree)
+    _ensure_linux_rc_binary(source_tree)
     _provision_msvc_sdk(args.sdk_root.resolve(), args.sdk_cache.resolve())
 
     # ---- rust toolchain layout ----------------------------------------------
