@@ -298,6 +298,16 @@ def main():
     # (including INSTALLED_VERSION), so test for the actual compiler, not the
     # marker file — upstream's check silently skipped the copy on full trees.
     if not (RUST_DIR_DST / 'bin' / 'rustc.exe').exists():
+        # The FULL tarball ships the Linux rust binaries (extensionless ELF:
+        # rustc, cargo, bindgen, ...) in bin/. Chromium's build scripts exec
+        # them by path-qualified name without an extension, and CreateProcess
+        # runs the exact file before trying <name>.exe — WinError 193 at
+        # rust-std build time. Upstream never sees this because the lite
+        # tarball ships no such files. Wipe bin/ so only Windows PE files
+        # remain after the copy below.
+        rust_bin_dst = RUST_DIR_DST / 'bin'
+        if rust_bin_dst.exists():
+            shutil.rmtree(rust_bin_dst)
         # A blanket */bin/* glob also copies rustc-codegen-cranelift-preview's
         # rustc wrapper, which (alphabetically after rustc/) overwrites the
         # real rustc.exe with a non-PE script — WinError 193 at rust-std

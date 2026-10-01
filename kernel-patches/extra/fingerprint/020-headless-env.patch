@@ -30,6 +30,14 @@ diff --git a/third_party/blink/renderer/modules/notifications/notification.cc b/
 index 643d8339359b95d69f9ad139232e7de6d4389e55..25dbc5a8b61744f824fb0ec1468639ab880489ea 100644
 --- a/third_party/blink/renderer/modules/notifications/notification.cc
 +++ b/third_party/blink/renderer/modules/notifications/notification.cc
+@@ -32,6 +32,7 @@ V8NotificationPermission Notification::permission(ExecutionContext* context) {
+ #include <memory>
+ #include <utility>
+ 
++#include "base/command_line.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/unguessable_token.h"
+ #include "mojo/public/cpp/bindings/pending_remote.h"
 @@ -448,6 +448,13 @@ V8NotificationPermission Notification::permission(ExecutionContext* context) {
        status = mojom::blink::PermissionStatus::DENIED;
    }
