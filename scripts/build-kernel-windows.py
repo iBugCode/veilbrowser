@@ -57,6 +57,25 @@ def _init_ugc_imports(ugc_win: Path) -> None:
     globals()['get_logger'] = get_logger
 
 
+def _retrieve_with_retry(download_info, downloads_cache, attempts=3):
+    """retrieve + hash-check, retrying transient download failures (the
+    bison/sourceforge mirrors occasionally 522). Cached files are skipped
+    on re-run, so a retry only fetches what is missing."""
+    for attempt in range(1, attempts + 1):
+        try:
+            downloads.retrieve_downloads(download_info, downloads_cache, None, True)
+            downloads.check_downloads(download_info, downloads_cache, None)
+            return
+        except subprocess.CalledProcessError as exc:
+            if attempt == attempts:
+                raise
+            get_logger().warning('download attempt %d failed (%s), retrying',
+                                 attempt, exc)
+        except downloads.HashMismatchError as exc:
+            get_logger().error('File checksum does not match: %s', exc)
+            raise
+
+
 def _unpack_tarball(cache: Path, source_tree: Path) -> None:
     """Extracts the hash-verified chromium-*.tar.xz with bsdtar.
 
@@ -199,22 +218,12 @@ def main():
         if not source_ini.exists():
             source_ini = ugc_win / 'ungoogled-chromium' / 'downloads.ini'
         download_info = downloads.DownloadInfo([source_ini])
-        downloads.retrieve_downloads(download_info, downloads_cache, None, True)
-        try:
-            downloads.check_downloads(download_info, downloads_cache, None)
-        except downloads.HashMismatchError as exc:
-            get_logger().error('File checksum does not match: %s', exc)
-            return 1
+        _retrieve_with_retry(download_info, downloads_cache)
         _unpack_tarball(downloads_cache, source_tree)
 
         get_logger().info('Downloading toolchain (LLVM, rust, git, ninja, node)...')
         download_info_win = downloads.DownloadInfo([ugc_win / 'downloads.ini'])
-        downloads.retrieve_downloads(download_info_win, downloads_cache, None, True)
-        try:
-            downloads.check_downloads(download_info_win, downloads_cache, None)
-        except downloads.HashMismatchError as exc:
-            get_logger().error('File checksum does not match: %s', exc)
-            return 1
+        _retrieve_with_retry(download_info_win, downloads_cache)
 
         # Prune binaries
         pruning_list = ugc_win / 'ungoogled-chromium' / 'pruning.list'

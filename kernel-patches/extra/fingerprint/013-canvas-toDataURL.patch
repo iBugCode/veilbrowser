@@ -1,5 +1,5 @@
 diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
-index 922c787b9b..ec23676a6e 100644
+index 40df4b3770468f979b3210b2e0689db45d8b6f2a..c42fe69777642bfb28bf742a25996ba5151600e9 100644
 --- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
 +++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
 @@ -33,6 +33,7 @@
@@ -10,15 +10,15 @@ index 922c787b9b..ec23676a6e 100644
  #include "base/feature_list.h"
  #include "base/functional/callback_helpers.h"
  #include "base/location.h"
-@@ -45,6 +46,7 @@
+@@ -42,6 +43,7 @@
  #include "base/numerics/safe_conversions.h"
  #include "base/trace_event/trace_event.h"
  #include "base/trace_event/typed_macros.h"
 +#include "components/ungoogled/ungoogled_switches.h"
  #include "build/build_config.h"
  #include "cc/layers/texture_layer.h"
- #include "services/metrics/public/cpp/ukm_recorder.h"
-@@ -1305,6 +1307,56 @@ String HTMLCanvasElement::ToDataURLInternal(
+ #include "cc/trees/layer_tree_host.h"
+@@ -1299,6 +1301,58 @@ String HTMLCanvasElement::ToDataURLInternal(
  
    scoped_refptr<StaticBitmapImage> image_bitmap = Snapshot(source_buffer);
    if (image_bitmap) {
@@ -40,7 +40,9 @@ index 922c787b9b..ec23676a6e 100644
 +      size_t row_bytes = image_info.minRowBytes();
 +      size_t buffer_size = image_info.computeMinByteSize();
 +
-+      if (buffer_size > 0 && buffer_size <= partition_alloc::MaxDirectMapped()) {
++      // partition_alloc::MaxDirectMapped() is gone in 153; the guard only
++      // rejects absurd sizes, so clamp with SIZE_MAX instead.
++      if (buffer_size > 0 && buffer_size <= SIZE_MAX) {
 +        std::vector<uint8_t> pixel_buffer(buffer_size);
 +
 +        // 从原始图像读取像素数据到我们的副本中
