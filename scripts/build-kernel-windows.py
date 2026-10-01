@@ -229,7 +229,19 @@ def main():
         _unpack_tarball(downloads_cache, source_tree)
 
         get_logger().info('Downloading toolchain (LLVM, rust, git, ninja, node)...')
-        download_info_win = downloads.DownloadInfo([ugc_win / 'downloads.ini'])
+        # bison comes from sourceforge, which intermittently 522s or serves
+        # corrupt bodies; the chrome target never invokes it (only iamf_tools
+        # does, not built on Windows) — filter those entries out.
+        filtered_ini = ugc_win / 'build' / 'downloads-filtered.ini'
+        filtered_ini.parent.mkdir(parents=True, exist_ok=True)
+        import configparser
+        cp = configparser.ConfigParser(strict=False)
+        cp.read(ugc_win / 'downloads.ini', encoding=globals()['ENCODING'])
+        for sec in ('bison-bin', 'bison-dep'):
+            cp.remove_section(sec)
+        with open(filtered_ini, 'w', encoding=globals()['ENCODING']) as f:
+            cp.write(f)
+        download_info_win = downloads.DownloadInfo([filtered_ini])
         _retrieve_with_retry(download_info_win, downloads_cache)
 
         # Prune binaries

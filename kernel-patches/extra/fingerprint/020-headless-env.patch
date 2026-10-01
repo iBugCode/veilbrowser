@@ -48,6 +48,13 @@ diff --git a/third_party/blink/renderer/modules/permissions/permissions.cc b/thi
 index e36c344035c0006fbb9f9bc50a42281744c6fb31..bccb0e6339663909918f69c887eece7ab730f27f 100644
 --- a/third_party/blink/renderer/modules/permissions/permissions.cc
 +++ b/third_party/blink/renderer/modules/permissions/permissions.cc
+@@ -9,5 +9,6 @@
+ 
+ #include "base/metrics/histogram_functions.h"
++#include "base/command_line.h"
+ #include "third_party/blink/public/common/permissions/permission_utils.h"
+ #include "third_party/blink/public/mojom/page/page.mojom-blink.h"
+ #include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
 @@ -276,6 +276,14 @@ void Permissions::TaskComplete(
        resolver->GetExecutionContext()->IsContextDestroyed())
      return;

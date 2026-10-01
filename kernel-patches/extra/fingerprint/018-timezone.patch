@@ -18,7 +18,7 @@ index 270c78bfd0332ed53e21db79b02abac8cc1209a5..03a67542433bec6248b143aec33b13a0
 +  if (command_line->HasSwitch(::switches::kFingerprintTimezone)) {
 +    std::string timezone_str = command_line->GetSwitchValueASCII(::switches::kFingerprintTimezone);
 +    if (!timezone_str.empty()) {
-+      return String::FromUTF8(timezone_str);
++      return String::FromUtf8(timezone_str);
 +    }
 +  }
 +
@@ -35,7 +35,7 @@ index 270c78bfd0332ed53e21db79b02abac8cc1209a5..03a67542433bec6248b143aec33b13a0
 +  if (command_line->HasSwitch(::switches::kFingerprintTimezone)) {
 +    std::string timezone_str = command_line->GetSwitchValueASCII(::switches::kFingerprintTimezone);
 +    if (!timezone_str.empty()) {
-+      SetIcuTimeZoneAndNotifyV8(String::FromUTF8(timezone_str));
++      SetIcuTimeZoneAndNotifyV8(String::FromUtf8(timezone_str));
 +    }
 +  }
  }
@@ -52,7 +52,7 @@ index 270c78bfd0332ed53e21db79b02abac8cc1209a5..03a67542433bec6248b143aec33b13a0
 +  if (command_line->HasSwitch(::switches::kFingerprintTimezone)) {
 +    std::string timezone_str = command_line->GetSwitchValueASCII(::switches::kFingerprintTimezone);
 +    if (!timezone_str.empty()) {
-+      actual_timezone_id = String::FromUTF8(timezone_str);
++      actual_timezone_id = String::FromUtf8(timezone_str);
 +    } else {
 +      actual_timezone_id = timezone_id;
 +    }
