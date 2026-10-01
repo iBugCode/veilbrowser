@@ -599,11 +599,19 @@ def main():
     gn_flags += f'wdk_path = "{sdk_root}/Windows Kits/10"\n'
     gn_flags += f'windows_sdk_path = "{sdk_root}/Windows Kits/10"\n'
     gn_flags += f'windows_sdk_version = "{sdk_ver}"\n'
+    # flags.windows.gn sets false (meaningless for a native windows build);
+    # on a linux host the toolchain needs the sysroot for its own configs.
+    gn_flags += 'use_sysroot = true\n'
     gn_flags += os.environ.get('VEIL_GN_EXTRA', '').replace('\\n', '\n') + '\n'
     (out_dir / 'args.gn').write_text(gn_flags, encoding=enc)
 
     # ---- build ----------------------------------------------------------------
     os.chdir(source_tree)
+    # The host (linux) toolchain still evaluates linux configs during
+    # gen; with the sysroot installed, its pkg-config lookups (nss, glib,
+    # ...) resolve inside the sysroot instead of needing host -dev packs.
+    subprocess.run([sys.executable, 'build/linux/sysroot_scripts/install-sysroot.py',
+                    '--arch=x64'], check=True)
     if not os.path.exists('out/Default/gn'):
         # The windows patch series pins bootstrap.py's ninja target to
         # 'gn.exe'; on linux the target is plain 'gn'. Replicate its steps.
