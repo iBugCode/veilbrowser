@@ -330,8 +330,11 @@ def _provision_msvc_sdk(sdk_root: Path, cache_dir: Path) -> None:
         get_logger().info('MSVC/SDK already provisioned at %s', sdk_root)
         return
 
-    img = Path('/srv/sdk-casefold.img')
-    mount = Path('/srv/win-sdk')
+    # Keep everything inside the (user-writable) workspace; only the
+    # image create/format/mount steps need sudo.
+    base = sdk_root.parent          # the loop-mount point, e.g. <ws>/win-sdk
+    img = base.parent / 'sdk-casefold.img'
+    mount = base
     subprocess.run(['sudo', 'truncate', '-s', '12G', str(img)], check=True)
     subprocess.run(['sudo', 'mkfs.ext4', '-q', '-O', 'casefold', '-F', str(img)],
                    check=True)
@@ -342,7 +345,7 @@ def _provision_msvc_sdk(sdk_root: Path, cache_dir: Path) -> None:
         subprocess.run(['sudo', 'mount', '-o', 'loop', str(img), str(mount)], check=True)
     subprocess.run(['sudo', 'chown', f'{os.getuid()}:{os.getgid()}', str(mount)], check=True)
 
-    scratch = Path('/srv/msvc-unpacked')
+    scratch = base.parent / 'msvc-unpacked'
     if not (scratch / 'VC').exists():
         scratch.mkdir(parents=True, exist_ok=True)
         subprocess.run([sys.executable, str(Path(__file__).resolve().parent.parent
@@ -488,9 +491,9 @@ def main():
                         help='veilbrowser kernel-patches directory')
     parser.add_argument('--out', default='dist', type=Path,
                         help='output directory for the kernel zip')
-    parser.add_argument('--sdk-root', default='/srv/win-sdk/msvc', type=Path,
+    parser.add_argument('--sdk-root', default=Path(os.environ.get('GITHUB_WORKSPACE', os.getcwd())) / 'win-sdk' / 'msvc', type=Path,
                         help='casefold mount point for the MSVC/SDK tree')
-    parser.add_argument('--sdk-cache', default='/srv/vsdownload-cache', type=Path,
+    parser.add_argument('--sdk-cache', default=Path(os.environ.get('GITHUB_WORKSPACE', os.getcwd())) / 'vsdownload-cache', type=Path,
                         help='persistent vsdownload package cache')
     parser.add_argument('-j', type=int, dest='thread_count', default=None,
                         help='ninja parallelism (default: all cores)')
