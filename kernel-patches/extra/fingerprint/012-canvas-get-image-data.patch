@@ -91,7 +91,7 @@ index 769b3bf7638b897cbe6e6c12289d71e40bc24b17..430ae9527b8e205c0139ac34ef895211
  #include "gpu/command_buffer/client/gles2_interface.h"
  #include "third_party/blink/renderer/platform/graphics/accelerated_static_bitmap_image.h"
  #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
-@@ -133,136 +137,275 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
+@@ -133,136 +137,276 @@ void StaticBitmapImage::ShuffleSubchannelColorData(const void *addr, const SkIma
      return;
    }
  
@@ -488,6 +488,7 @@ index 769b3bf7638b897cbe6e6c12289d71e40bc24b17..430ae9527b8e205c0139ac34ef895211
 +
 +        default:
 +          break;
++}
      }
    }
  }
