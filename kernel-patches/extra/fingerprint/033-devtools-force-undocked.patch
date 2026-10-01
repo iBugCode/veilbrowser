@@ -1,0 +1,16 @@
+diff --git a/chrome/browser/devtools/devtools_window.cc b/chrome/browser/devtools/devtools_window.cc
+--- a/chrome/browser/devtools/devtools_window.cc
++++ b/chrome/browser/devtools/devtools_window.cc
+@@ -1403,6 +1403,12 @@
+   }
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
++  // Veil: always open DevTools undocked. A docked panel shrinks the page
++  // viewport, which page JS observes directly (resize event, innerWidth,
++  // outerWidth-innerWidth delta) — the classic open-DevTools probe. An
++  // undocked window leaves the inspected page's geometry untouched.
++  can_dock = false;
++
+   // Create WebContents with devtools.
+   GURL url(GetDevToolsURL(profile, frontend_type, frontend_url, can_dock, panel,
+                           has_other_clients, browser_connection));

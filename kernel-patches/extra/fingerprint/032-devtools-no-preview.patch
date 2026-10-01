@@ -1,0 +1,42 @@
+diff --git a/v8/src/inspector/v8-runtime-agent-impl.cc b/v8/src/inspector/v8-runtime-agent-impl.cc
+--- a/v8/src/inspector/v8-runtime-agent-impl.cc
++++ b/v8/src/inspector/v8-runtime-agent-impl.cc
+@@ -1230,7 +1230,11 @@
+ }
+ 
+ void V8RuntimeAgentImpl::messageAdded(V8ConsoleMessage* message) {
+-  // if (m_enabled) reportMessage(message, true);
++  // Veil: deliver live console/exception messages again (001 silenced them
++  // entirely, which froze the DevTools console) but never generate previews:
++  // preview building invokes JS getters, which pages use as an
++  // open-DevTools/CDP probe.
++  if (m_enabled) reportMessage(message, false);
+ }
+ 
+ bool V8RuntimeAgentImpl::reportMessage(V8ConsoleMessage* message,
+diff --git a/v8/src/inspector/v8-runtime-agent-impl.h b/v8/src/inspector/v8-runtime-agent-impl.h
+--- a/v8/src/inspector/v8-runtime-agent-impl.h
++++ b/v8/src/inspector/v8-runtime-agent-impl.h
+@@ -160,7 +160,7 @@
+                std::unique_ptr<protocol::DictionaryValue> hints,
+                int executionContextId);
+   void messageAdded(V8ConsoleMessage*);
+-  bool enabled() const { return false; }
++  bool enabled() const { return m_enabled; }
+ 
+  private:
+   bool reportMessage(V8ConsoleMessage*, bool generatePreview);
+diff --git a/v8/src/inspector/v8-console-agent-impl.cc b/v8/src/inspector/v8-console-agent-impl.cc
+--- a/v8/src/inspector/v8-console-agent-impl.cc
++++ b/v8/src/inspector/v8-console-agent-impl.cc
+@@ -51,7 +51,9 @@
+ }
+ 
+ void V8ConsoleAgentImpl::messageAdded(V8ConsoleMessage* message) {
+-  if (m_enabled) reportMessage(message, true);
++  // Veil: never generate previews (getter-invocation probe, see
++  // V8RuntimeAgentImpl::messageAdded).
++  if (m_enabled) reportMessage(message, false);
+ }
+ 
+ bool V8ConsoleAgentImpl::enabled() { return m_enabled; }

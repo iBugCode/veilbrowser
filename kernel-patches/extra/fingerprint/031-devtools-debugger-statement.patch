@@ -1,0 +1,21 @@
+diff --git a/v8/src/runtime/runtime-debug.cc b/v8/src/runtime/runtime-debug.cc
+--- a/v8/src/runtime/runtime-debug.cc
++++ b/v8/src/runtime/runtime-debug.cc
+@@ -177,14 +177,9 @@
+ RUNTIME_FUNCTION(Runtime_HandleDebuggerStatement) {
+   SealHandleScope shs(isolate);
+   DCHECK_EQ(0, args.length());
+-  if (isolate->debug()->break_points_active()) {
+-    isolate->debug()->HandleDebugBreak(
+-        kIgnoreIfTopFrameBlackboxed,
+-        v8::debug::BreakReasons({v8::debug::BreakReason::kDebuggerStatement}));
+-    if (isolate->debug()->IsRestartFrameScheduled()) {
+-      return isolate->TerminateExecution();
+-    }
+-  }
++  // Veil: never pause on the `debugger` statement. Its pause-when-attached
++  // latency is a classic open-DevTools/CDP probe; breakpoints and explicit
++  // pausing still work through the regular Debug::Break paths.
+   return isolate->stack_guard()->HandleInterrupts();
+ }
+ 

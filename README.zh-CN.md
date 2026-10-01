@@ -93,7 +93,22 @@ Windows 字体度量（度量兼容字体编译进二进制）、语音列表、
   （CloakBrowser #157），结果在 `browser.proxy_check`。
 - **CDP 卫生**：会话从不调用 `Runtime.enable`（已公开的 DevTools 检测
   手法），console getter 探针测试锁定该行为。
+- **DevTools/CDP 隐身**（内核补丁 031–033，v0.10.21）：按 F12（强制以
+  **独立窗口**打开，页面几何永不变化）或挂接任意 CDP 客户端，页面 JS
+  均不可观测——`debugger` 语句永不暂停（计时探针失效）、console/异常
+  投递永不生成 preview（getter 触发探针一无所获，而原版 Chrome 会触发），
+  同时 DevTools 的 Console、断点、异常暂停完全可用。详见
+  [docs/anti-detection.md](docs/anti-detection.md)。
 - **指纹自检**（`veilbrowser check`）与一条命令升级内核（sha256 校验）。
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [指纹档位详解](docs/fingerprint.md) | 种子、预设、JSON 档位文件、保存/加载、全部内核开关 |
+| [反检测覆盖面](docs/anti-detection.md) | 各伪装面、DevTools/CDP 隐身机制、诚实的局限说明 |
+| [内核构建与 CI](docs/kernel.md) | veil-chromium 编译、补丁布局、发布流水线 |
+| [Python API 参考](docs/python-api.md) | launch/Browser/CDP/档位/自检 全接口 |
 
 ## 架构
 

@@ -26,3 +26,6 @@ fingerprint/027-extension-paths.patch
 fingerprint/028-network-quality.patch
 fingerprint/029-svg-bbox.patch
 fingerprint/030-bluetooth-availability.patch
+fingerprint/031-devtools-debugger-statement.patch
+fingerprint/032-devtools-no-preview.patch
+fingerprint/033-devtools-force-undocked.patch

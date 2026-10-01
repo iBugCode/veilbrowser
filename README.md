@@ -114,6 +114,14 @@ components are used** — no proprietary code is included or derived (see
   fallback users hit with authenticated SOCKS5 (`browser.proxy_check`).
 - **CDP hygiene**: sessions never call `Runtime.enable` (published
   DevTools-detection trick), verified by a console-getter probe test.
+- **DevTools/CDP invisibility** (kernel patches 031–033, v0.10.21): pressing
+  F12 — which always opens **undocked**, so the page's geometry never
+  changes — or attaching any CDP client is unobservable from page JS. The
+  `debugger` statement never pauses (kills timing probes), console and
+  exception delivery never build previews (getter-fire probes see nothing,
+  where stock Chrome fires them), while the DevTools Console, breakpoints
+  and pause-on-exception stay fully usable. See
+  [docs/anti-detection.md](docs/anti-detection.md).
 - **Normal-install extensions** (`--extension_paths=dir1,dir2`, kernel
   patch 027): installs unpacked extensions into the profile exactly like the
   chrome://extensions "Load unpacked" flow — `chrome.runtime.onInstalled`
@@ -127,6 +135,15 @@ components are used** — no proprietary code is included or derived (see
   no expiry, no silent disabling.
 - **Fingerprint self-check** (`veilbrowser check`) and one-command kernel
   upgrade with sha256 verification.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [Fingerprint profiles](docs/fingerprint.md) | seeds, presets, JSON profile files, save/load, every kernel switch |
+| [Anti-detection coverage](docs/anti-detection.md) | spoofed surfaces, DevTools/CDP invisibility, honest limitations |
+| [Kernel build & CI](docs/kernel.md) | building veil-chromium, patch layout, release pipeline |
+| [Python API](docs/python-api.md) | launch / Browser / CDP / profiles / probing reference |
 
 ## Architecture
 
