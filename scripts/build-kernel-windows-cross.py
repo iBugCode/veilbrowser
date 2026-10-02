@@ -123,9 +123,13 @@ def _write_extra_series(kernel_patches: Path) -> Path:
 
 def _package(source_tree: Path, out_dir: Path, name: str) -> Path:
     out = source_tree / 'out' / 'Default'
+    # Upstream disables use_v8_context_snapshot for win cross builds
+    # ("building Blink twice is slow"); the runtime then loads
+    # snapshot_blob.bin instead, which is always produced.
     required = ['chrome.exe', 'chrome.dll', 'chrome_elf.dll', 'icudtl.dat',
-                'resources.pak', 'v8_context_snapshot.bin']
-    optional = ['chrome_100_percent.pak', 'chrome_200_percent.pak']
+                'resources.pak', 'snapshot_blob.bin']
+    optional = ['chrome_100_percent.pak', 'chrome_200_percent.pak',
+                'v8_context_snapshot.bin']
     missing = [f for f in required if not (out / f).exists()]
     if missing:
         raise RuntimeError('build output missing files: {}'.format(missing))
