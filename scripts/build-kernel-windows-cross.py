@@ -315,6 +315,33 @@ def _ensure_linux_rc_binary(source_tree: Path) -> None:
     rc_bin.chmod(0o755)
 
 
+def _ensure_pregenerated_tlbs(source_tree: Path, arch: str = 'x64') -> None:
+    """win_build_output never carries pregenerated MIDL .tlb files (googlers
+    regenerate them on Windows hosts); midl.py on a non-Windows host aborts
+    on the first idl action that declares a tlb output. Create empty
+    placeholders — the tlbs only feed updater/elevation-service COM
+    registration, which the packaged kernel never runs."""
+    out_dir = source_tree / 'out' / 'Default'
+    res = subprocess.run(['ninja', '-C', str(out_dir), '-t', 'targets', 'all'],
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        return
+    wb = source_tree / 'third_party' / 'win_build_output' / 'midl'
+    made = 0
+    for line in res.stdout.splitlines():
+        path = line.split(':', 1)[0].strip()
+        if not (path.startswith('gen/') and path.endswith('.tlb')):
+            continue
+        rel = Path(path[len('gen/'):])
+        dest = wb / rel.parent / arch / rel.name
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b'')
+            made += 1
+    if made:
+        get_logger().info('Created %d placeholder pregenerated .tlb files', made)
+
+
 def _provision_msvc_sdk(sdk_root: Path, cache_dir: Path) -> None:
     """Fetch MSVC+SDK via vsdownload.py and lay it out on a casefold mount.
 
@@ -629,6 +656,7 @@ def main():
         shutil.copy2('out/Release/gn_build/gn', 'out/Default/gn')
     subprocess.run(['out/Default/gn', 'gen', 'out/Default',
                     '--fail-on-unused-args'], check=True)
+    _ensure_pregenerated_tlbs(source_tree)
     if not (source_tree / 'third_party' / 'rust-toolchain' / 'bin' / 'bindgen').exists():
         subprocess.run([sys.executable, 'tools/rust/build_bindgen.py', '--skip-test'],
                        check=True)
