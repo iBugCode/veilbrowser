@@ -342,6 +342,25 @@ def _ensure_pregenerated_tlbs(source_tree: Path, arch: str = 'x64') -> None:
         get_logger().info('Created %d placeholder pregenerated .tlb files', made)
 
 
+def _fix_midl_empty_tlb(source_tree: Path) -> None:
+    """win_build_output carries no .tlb files, so on a linux host the midl
+    actions copy our empty placeholder; overwrite_guids_tlb then chokes
+    parsing a zero-byte type library. Skip the rewrite for empty tlbs —
+    they only feed updater/elevation COM registration, never packaged."""
+    midl = source_tree / 'build' / 'toolchain' / 'win' / 'midl.py'
+    text = midl.read_text(encoding='utf-8')
+    broken = ("def overwrite_guids_tlb(tlb_file, dynamic_guids):\n"
+              "    contents, ntypes, type_off, guid_off, guid_len = "
+              "get_tlb_contents(tlb_file)\n")
+    fixed = ("def overwrite_guids_tlb(tlb_file, dynamic_guids):\n"
+             "    if os.path.getsize(tlb_file) == 0:\n"
+             "        return\n"
+             "    contents, ntypes, type_off, guid_off, guid_len = "
+             "get_tlb_contents(tlb_file)\n")
+    if broken in text:
+        midl.write_text(text.replace(broken, fixed), encoding='utf-8')
+
+
 def _provision_msvc_sdk(sdk_root: Path, cache_dir: Path) -> None:
     """Fetch MSVC+SDK via vsdownload.py and lay it out on a casefold mount.
 
@@ -596,6 +615,7 @@ def main():
     # ---- MSVC/SDK on the casefold mount ------------------------------------
     _patch_tree_for_cross_sdk(source_tree)
     _fix_rc_wrapper(source_tree)
+    _fix_midl_empty_tlb(source_tree)
     _ensure_linux_rc_binary(source_tree)
     _provision_msvc_sdk(args.sdk_root.resolve(), args.sdk_cache.resolve())
 
