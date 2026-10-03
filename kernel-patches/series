@@ -140,3 +140,6 @@ extra/fingerprint/027-extension-paths.patch
 extra/fingerprint/028-network-quality.patch
 extra/fingerprint/029-svg-bbox.patch
 extra/fingerprint/030-bluetooth-availability.patch
+extra/fingerprint/031-devtools-debugger-statement.patch
+extra/fingerprint/032-devtools-no-preview.patch
+extra/fingerprint/033-devtools-force-undocked.patch
