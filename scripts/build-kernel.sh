@@ -192,12 +192,15 @@ EOF
 cd src
 python3 tools/gn/bootstrap/bootstrap.py -o out/Default/gn --skip-generate-buildfiles -j "$JOBS"
 ./out/Default/gn gen out/Default --fail-on-unused-args
-ninja -C out/Default chrome chrome_sandbox -j "$JOBS"
+ninja -C out/Default chrome chrome_sandbox chrome_crashpad_handler -j "$JOBS"
 
 # ---- 6. package the kernel ----------------------------------------------------
 cd ..
+# chrome_crashpad_handler must ship: without it the browser FATALs on
+# posix_spawn at startup (crashpad/util/posix/spawn_subprocess.cc).
 tar -C src/out/Default -caf "$OUT/veil-chromium-$VER-linux-x64.tar.zst" \
-    chrome chrome_sandbox chrome_100_percent.pak chrome_200_percent.pak \
+    chrome chrome_sandbox chrome_crashpad_handler \
+    chrome_100_percent.pak chrome_200_percent.pak \
     icudtl.dat resources.pak v8_context_snapshot.bin locales
 echo "==> kernel tarball: $OUT/veil-chromium-$VER-linux-x64.tar.zst"
 echo "    use it with:  VEIL_CHROME_PATH=<unpacked>/chrome veilbrowser check"
