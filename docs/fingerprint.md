@@ -110,6 +110,19 @@ directly when launching the binary by hand):
 | `--disable-spoofing=font,audio,canvas,clientrects,gpu` | opt out per surface |
 | `--lang=` / `--accept-lang=` | navigator.language(s), header alignment |
 
+`--timezone=` and `--accept-lang=` are the canonical spellings;
+`--fingerprint-timezone=` and `--lang=` are CloakBrowser-compatible
+aliases (kernel patch 034) that behave identically — an explicit
+`--timezone=` / `--accept-lang=` wins when both are passed.
+
+The full UA string can be overridden with the upstream `--user-agent=`
+switch (navigator.userAgent and the HTTP header both follow). Pair it
+with `--fingerprint-brand=chrome --fingerprint-brand-version=X` and
+`--fingerprint-platform=` so UA-CH (`navigator.userAgentData`,
+`Sec-CH-UA`) reports the same browser version and OS as the string —
+`--fingerprint-brand` alone never changes the UA string, it only
+rewrites UA-CH.
+
 Switches the launcher adds for every kernel session:
 `--no-first-run --no-default-browser-check --disable-sync`
 (+ `--no-sandbox` when running as root, `--disable-dev-shm-usage` in

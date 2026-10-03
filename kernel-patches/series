@@ -143,3 +143,4 @@ extra/fingerprint/030-bluetooth-availability.patch
 extra/fingerprint/031-devtools-debugger-statement.patch
 extra/fingerprint/032-devtools-no-preview.patch
 extra/fingerprint/033-devtools-force-undocked.patch
+extra/fingerprint/034-cloakbrowser-switch-aliases.patch

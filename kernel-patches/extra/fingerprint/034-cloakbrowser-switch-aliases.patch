@@ -1,0 +1,148 @@
+diff --git a/chrome/browser/prefs/chrome_command_line_pref_store.cc b/chrome/browser/prefs/chrome_command_line_pref_store.cc
+index f811980..fc98d5d 100644
+--- a/chrome/browser/prefs/chrome_command_line_pref_store.cc
++++ b/chrome/browser/prefs/chrome_command_line_pref_store.cc
+@@ -47,6 +47,11 @@
+ const CommandLinePrefStore::SwitchToPreferenceMapEntry
+     ChromeCommandLinePrefStore::string_switch_map_[] = {
+         {switches::kLang, language::prefs::kApplicationLocale},
++        // --lang= is CloakBrowser's language switch; also seed
++        // intl.accept_languages from it so navigator.language(s) and the
++        // Accept-Language header follow. An explicit --accept-lang= must
++        // win, so its entry has to come after this one.
++        {switches::kLang, language::prefs::kSelectedLanguages},
+         {switches::kAcceptLang, language::prefs::kSelectedLanguages},
+         {switches::kAuthServerAllowlist, prefs::kAuthServerAllowlist},
+         {switches::kSSLVersionMin, prefs::kSSLVersionMin},
+diff --git a/components/ungoogled/ungoogled_switches.cc b/components/ungoogled/ungoogled_switches.cc
+index 49b36e8..40b1184 100644
+--- a/components/ungoogled/ungoogled_switches.cc
++++ b/components/ungoogled/ungoogled_switches.cc
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "base/command_line.h"
+ #include "components/ungoogled/ungoogled_switches.h"
+ 
+ namespace switches {
+@@ -57,4 +58,20 @@ const char kFingerprintLocation[] = "fingerprint-location";
+ // Specify the timezone
+ const char kFingerprintTimezone[] = "timezone";
+ 
++// Specify the timezone (CloakBrowser-compatible alias for kFingerprintTimezone)
++const char kFingerprintTimezoneAlias[] = "fingerprint-timezone";
++
++std::string GetFingerprintTimezoneOverride() {
++  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  for (const char* name : {kFingerprintTimezone, kFingerprintTimezoneAlias}) {
++    if (command_line->HasSwitch(name)) {
++      std::string value = command_line->GetSwitchValueASCII(name);
++      if (!value.empty()) {
++        return value;
++      }
++    }
++  }
++  return std::string();
++}
++
+ }  // namespace switches
+diff --git a/components/ungoogled/ungoogled_switches.h b/components/ungoogled/ungoogled_switches.h
+index f2c5c44..987e28f 100644
+--- a/components/ungoogled/ungoogled_switches.h
++++ b/components/ungoogled/ungoogled_switches.h
+@@ -9,6 +9,8 @@
+ 
+ #include "base/component_export.h"
+ 
++#include <string>
++
+ namespace switches {
+ 
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintingClientRectsNoise[];
+@@ -29,6 +31,10 @@ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintPlatform[];
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintPlatformVersion[];
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintLocation[];
+ COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintTimezone[];
++COMPONENT_EXPORT(UNGOOGLED) extern const char kFingerprintTimezoneAlias[];
++// Timezone override from --timezone= (or the --fingerprint-timezone= alias);
++// empty when neither switch carries a value.
++COMPONENT_EXPORT(UNGOOGLED) std::string GetFingerprintTimezoneOverride();
+ }
+ 
+ #endif  // THIRD_PARTY_UNGOOGLED_FINGERPRINTING_SWITCHES_H_
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index a3eb762..4c3cfb5 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -3916,6 +3916,7 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
+       switches::kFingerprintPlatformVersion,
+       switches::kFingerprintLocation,
+       switches::kFingerprintTimezone,
++      switches::kFingerprintTimezoneAlias,
+       switches::kForceDeviceScaleFactor,
+       switches::kForceDisplayColorProfile,
+       switches::kForceHighContrast,
+diff --git a/third_party/blink/renderer/core/timezone/timezone_controller.cc b/third_party/blink/renderer/core/timezone/timezone_controller.cc
+index f297212..9bad747 100644
+--- a/third_party/blink/renderer/core/timezone/timezone_controller.cc
++++ b/third_party/blink/renderer/core/timezone/timezone_controller.cc
+@@ -64,12 +64,9 @@ String GetTimezoneId(const icu::TimeZone& timezone) {
+ }
+ 
+ String GetCurrentTimezoneId() {
+-  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-  if (command_line->HasSwitch(::switches::kFingerprintTimezone)) {
+-    std::string timezone_str = command_line->GetSwitchValueASCII(::switches::kFingerprintTimezone);
+-    if (!timezone_str.empty()) {
+-      return String::FromUtf8(timezone_str);
+-    }
++  const std::string timezone_str = ::switches::GetFingerprintTimezoneOverride();
++  if (!timezone_str.empty()) {
++    return String::FromUtf8(timezone_str);
+   }
+ 
+   std::unique_ptr<icu::TimeZone> timezone(icu::TimeZone::createDefault());
+@@ -109,13 +106,11 @@ TimeZoneController::TimeZoneController() {
+     host_timezone_id_ = GetCurrentTimezoneId();
+   }
+ 
+-  // Apply --timezone parameter at startup
+-  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+-  if (command_line->HasSwitch(::switches::kFingerprintTimezone)) {
+-    std::string timezone_str = command_line->GetSwitchValueASCII(::switches::kFingerprintTimezone);
+-    if (!timezone_str.empty()) {
+-      SetIcuTimeZoneAndNotifyV8(String::FromUtf8(timezone_str));
+-    }
++  // Apply the timezone override at startup (--timezone= or the
++  // --fingerprint-timezone= alias).
++  const std::string timezone_str = ::switches::GetFingerprintTimezoneOverride();
++  if (!timezone_str.empty()) {
++    SetIcuTimeZoneAndNotifyV8(String::FromUtf8(timezone_str));
+   }
+ }
+ 
+@@ -242,19 +237,13 @@ void TimeZoneController::ChangeTimeZoneOverride(const String& timezone_id) {
+ }
+ 
+ bool TimeZoneController::SetIcuTimeZoneAndNotifyV8(const String& timezone_id) {
+-  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  const std::string override_str = ::switches::GetFingerprintTimezoneOverride();
+   String actual_timezone_id;
+-
+-  if (command_line->HasSwitch(::switches::kFingerprintTimezone)) {
+-    std::string timezone_str = command_line->GetSwitchValueASCII(::switches::kFingerprintTimezone);
+-    if (!timezone_str.empty()) {
+-      actual_timezone_id = String::FromUtf8(timezone_str);
+-    } else {
+-      actual_timezone_id = timezone_id;
+-    }
+-  } else {
++  if (override_str.empty()) {
+     DCHECK(!timezone_id.empty());
+     actual_timezone_id = timezone_id;
++  } else {
++    actual_timezone_id = String::FromUtf8(override_str);
+   }
+ 
+   std::unique_ptr<icu::TimeZone> timezone(icu::TimeZone::createTimeZone(
