@@ -192,22 +192,26 @@ EOF
 cd src
 python3 tools/gn/bootstrap/bootstrap.py -o out/Default/gn --skip-generate-buildfiles -j "$JOBS"
 ./out/Default/gn gen out/Default --fail-on-unused-args
-ninja -C out/Default chrome chrome_sandbox chrome_crashpad_handler -j "$JOBS"
+ninja -C out/Default chrome chrome_sandbox chrome_crashpad_handler chromedriver -j "$JOBS"
 
 # ---- 6. package the kernel ----------------------------------------------------
 cd ..
-# chrome_crashpad_handler must ship: without it the browser FATALs on
-# posix_spawn at startup (crashpad/util/posix/spawn_subprocess.cc).
-# The ANGLE/SwiftShader set must ship too: chrome resolves libEGL.so from its
-# own directory first, and on hosts without system GL (slim containers,
-# headless servers) the GPU process then exits and WebGL is dead — every
-# WebGL-dependent page (hCaptcha/FunCaptcha, maps, games) fails. Mirrors the
-# official ungoogled-chromium linux package file list.
+# File list mirrors the official ungoogled-chromium linux package (i.e.
+# chrome/tools/build/linux/FILES.cfg filtered the way portablelinux ships it):
+# - chrome_crashpad_handler must ship: without it the browser FATALs on
+#   posix_spawn at startup (crashpad/util/posix/spawn_subprocess.cc).
+# - The ANGLE/SwiftShader set must ship: chrome resolves libEGL.so from its
+#   own directory first, and on hosts without system GL (slim containers,
+#   headless servers) the GPU process then exits and WebGL is dead — every
+#   WebGL-dependent page (hCaptcha/FunCaptcha, maps, games) fails.
+# - chromedriver ships for WebDriver automation; qt shims/wrapper/logo and
+#   the (empty) extensions/ dir round out parity with the official archive.
 tar -C src/out/Default -caf "$OUT/veil-chromium-$VER-linux-x64.tar.zst" \
-    chrome chrome_sandbox chrome_crashpad_handler \
+    chrome chrome_sandbox chrome_crashpad_handler chromedriver chrome-wrapper \
     chrome_100_percent.pak chrome_200_percent.pak \
     libEGL.so libGLESv2.so libvk_swiftshader.so libvulkan.so.1 \
     vk_swiftshader_icd.json \
+    libqt5_shim.so libqt6_shim.so product_logo_48.png extensions \
     icudtl.dat resources.pak v8_context_snapshot.bin locales
 echo "==> kernel tarball: $OUT/veil-chromium-$VER-linux-x64.tar.zst"
 echo "    use it with:  VEIL_CHROME_PATH=<unpacked>/chrome veilbrowser check"
