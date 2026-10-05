@@ -114,9 +114,10 @@ components are used** — no proprietary code is included or derived (see
   fallback users hit with authenticated SOCKS5 (`browser.proxy_check`).
 - **CDP hygiene**: sessions never call `Runtime.enable` (published
   DevTools-detection trick), verified by a console-getter probe test.
-- **DevTools/CDP invisibility** (kernel patches 031–033, v0.10.21): pressing
-  F12 — which always opens **undocked**, so the page's geometry never
-  changes — or attaching any CDP client is unobservable from page JS. The
+- **DevTools/CDP invisibility** (kernel patches 031–032, v0.10.21): pressing
+  F12 — which opens **docked inside the browser window**, exactly as in
+  stock Chrome — or attaching any CDP client leaves no trace beyond what a
+  real user's stock Chrome produces. The
   `debugger` statement never pauses (kills timing probes), console and
   exception delivery never build previews (getter-fire probes see nothing,
   where stock Chrome fires them), while the DevTools Console, breakpoints

@@ -28,4 +28,4 @@ fingerprint/029-svg-bbox.patch
 fingerprint/030-bluetooth-availability.patch
 fingerprint/031-devtools-debugger-statement.patch
 fingerprint/032-devtools-no-preview.patch
-fingerprint/033-devtools-force-undocked.patch
+fingerprint/034-cloakbrowser-switch-aliases.patch

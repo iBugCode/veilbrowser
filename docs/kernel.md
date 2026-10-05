@@ -16,8 +16,7 @@ kernel-patches/
         ├── 001-disable-runtime.enable.patch     # CDP Runtime domain silencing
         ├── 002…030                              # one surface per patch
         ├── 031-devtools-debugger-statement.patch
-        ├── 032-devtools-no-preview.patch
-        └── 033-devtools-force-undocked.patch
+        └── 032-devtools-no-preview.patch
 scripts/
 ├── build-kernel-windows.py # full Windows x64 pipeline (fetch→patch→build→package)
 ├── gen_kernel_patches.py   # regenerate series helpers

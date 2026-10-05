@@ -21,10 +21,11 @@ inside the kernel — no page-visible JavaScript participates in spoofing.
 | Headless environment tells (`document.hasFocus`, notification/permission "denied by default", focus masking) | yes | patches 010/020 — headless sessions report headful values |
 | Speech voices, media devices, storage quota, network quality, bluetooth availability | yes | seeded plausible values, cross-consistent |
 
-## DevTools & CDP invisibility (patches 031–033, since v0.10.21)
+## DevTools & CDP invisibility (patches 031–032, since v0.10.21)
 
-Goal: **opening DevTools with F12, or attaching any CDP client, is not
-observable by page JavaScript** — at any time, headful or headless.
+Goal: **opening DevTools with F12, or attaching any CDP client, leaves no
+trace beyond what stock Chrome shows for any human user** — at any time,
+headful or headless.
 
 ### How each known vector is closed
 
@@ -34,7 +35,7 @@ observable by page JavaScript** — at any time, headful or headless.
 | Console serialization getters | `console.log(objWithGetter)` fires the getter while DevTools/CDP is attached (preview building) | **closed** (001 + 032): object previews are never generated for protocol delivery — DevTools shows `Object` and invokes getters only when *you* click to expand |
 | Uncaught-exception previews | `throw objWithGetter` fires getters when CDP delivers `Runtime.exceptionThrown` | **closed** (032): exceptions are delivered (F12 shows them again) but never previewed |
 | `console.table` getter sweep | `console.table([{get id(){…}}])` | **closed**: table path never invokes page getters |
-| Window geometry delta | docked DevTools shrinks the viewport → `resize` event, `innerWidth` drop, `outerWidth-innerWidth` gap | **closed structurally** (033): DevTools always opens **undocked** (separate window) — the inspected page's geometry never changes; fingerprint screen values are constant anyway |
+| Window geometry delta | docked DevTools shrinks the viewport → `resize` event, `innerWidth` drop, `outerWidth-innerWidth` gap | **stock behavior** (033 removed, v0.10.28): DevTools docks **inside the browser window** exactly as in stock Chrome (default bottom, per-profile dock preference, undock via the ⋮ menu) — the geometry delta is identical to what any real user opening DevTools produces, so it is not a bot signal; fingerprint screen values are constant anyway |
 | `navigator.webdriver` | automation flag | **closed** (009): always `false` |
 | F12 keypress reaching the page | `keydown` listeners | n/a: F12 is consumed by the browser and never dispatched to page JS |
 | Console-only globals (`getEventListeners`, `$0`, `__commandLineAPI`) | `'getEventListeners' in window` | n/a: these exist only in console evaluation contexts, never in the page realm |
@@ -42,7 +43,9 @@ observable by page JavaScript** — at any time, headful or headless.
 
 ### What the F12 experience looks like
 
-DevTools opens as an **undocked window** and is fully usable: Elements,
+DevTools opens **docked inside the browser window** — stock Chrome's default
+(bottom edge); the per-profile dock preference and the undock option in the
+panel's ⋮ menu work as usual — and is fully usable: Elements,
 Sources, breakpoints, pause-on-exception, stepping, Network, Performance.
 The Console panel shows messages and uncaught exceptions normally; object
 values render as expandable placeholders (`Object`, `[…]`) instead of
@@ -72,9 +75,10 @@ Symbol.toStringTag on logged objects         : fires identically with AND
 
 ### Honest limitations
 
-- **Focus/blur**: focusing the undocked DevTools window blurs the page, so
-  `window.onblur` fires — exactly as it does for any alt-tab. This is a
-  generic focus signal, not a DevTools-specific one, and `document.hasFocus()`
+- **Focus/blur**: clicking into the docked DevTools panel moves focus away
+  from the page, so `window.onblur` fires — exactly as it does in stock
+  Chrome for any user. This is a generic focus signal, not a
+  DevTools-specific one, and `document.hasFocus()`
   stays truthful. Masking focus would break ordinary web behavior.
 - **Element hover**: hovering nodes in the Elements panel can trigger
   `:hover`-dependent styles on the inspected element, observable via

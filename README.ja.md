@@ -110,8 +110,9 @@ WebGL 上限。ページで動くのはブラウザ自身のコードだけで�
   バック」を検出（CloakBrowser #157）。結果は `browser.proxy_check`。
 - **CDP 衛生**：セッションは `Runtime.enable` を一切呼ばない（公開済みの
   DevTools 検出トリック）。console-getter プローブテストで動作を固定。
-- **DevTools/CDP 不可視化**（カーネル パッチ 031–033、v0.10.21）：F12 は
-  常に undocked で開きページのジオメトリは不変。`debugger` 文は一時停止
+- **DevTools/CDP 不可視化**（カーネル パッチ 031–032、v0.10.21）：F12 は
+  純正 Chrome と同じくブラウザ ウィンドウ内にドッキングして開きます。
+  `debugger` 文は一時停止
   せず、console/例外の配信はプレビューを生成しないため、getter 発火
   プローブは何も検出できません。DevTools の Console・ブレークポイント・
   例外一時停止は通常どおり利用可能。詳細は
