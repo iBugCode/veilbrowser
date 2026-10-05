@@ -198,9 +198,16 @@ ninja -C out/Default chrome chrome_sandbox chrome_crashpad_handler -j "$JOBS"
 cd ..
 # chrome_crashpad_handler must ship: without it the browser FATALs on
 # posix_spawn at startup (crashpad/util/posix/spawn_subprocess.cc).
+# The ANGLE/SwiftShader set must ship too: chrome resolves libEGL.so from its
+# own directory first, and on hosts without system GL (slim containers,
+# headless servers) the GPU process then exits and WebGL is dead — every
+# WebGL-dependent page (hCaptcha/FunCaptcha, maps, games) fails. Mirrors the
+# official ungoogled-chromium linux package file list.
 tar -C src/out/Default -caf "$OUT/veil-chromium-$VER-linux-x64.tar.zst" \
     chrome chrome_sandbox chrome_crashpad_handler \
     chrome_100_percent.pak chrome_200_percent.pak \
+    libEGL.so libGLESv2.so libvk_swiftshader.so libvulkan.so.1 \
+    vk_swiftshader_icd.json \
     icudtl.dat resources.pak v8_context_snapshot.bin locales
 echo "==> kernel tarball: $OUT/veil-chromium-$VER-linux-x64.tar.zst"
 echo "    use it with:  VEIL_CHROME_PATH=<unpacked>/chrome veilbrowser check"

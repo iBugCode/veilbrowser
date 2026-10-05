@@ -150,9 +150,19 @@ def _write_extra_series(kernel_patches: Path) -> Path:
 
 def _package(source_tree: Path, out_dir: Path, name: str) -> Path:
     out = source_tree / 'out' / 'Default'
+    # snapshot_blob.bin, not v8_context_snapshot.bin: the win cross build
+    # disables use_v8_context_snapshot ("Blink compiles twice"), so the
+    # context snapshot never exists and chrome runs off the plain blob.
+    # The ANGLE/SwiftShader DLLs must ship: Windows has no usable system
+    # OpenGL, so without them the GPU process exits and WebGL is dead on
+    # every machine — mirrors the official chrome installer payload.
     required = ['chrome.exe', 'chrome.dll', 'chrome_elf.dll', 'icudtl.dat',
-                'resources.pak', 'v8_context_snapshot.bin']
-    optional = ['chrome_100_percent.pak', 'chrome_200_percent.pak']
+                'resources.pak', 'snapshot_blob.bin',
+                'libEGL.dll', 'libGLESv2.dll', 'd3dcompiler_47.dll',
+                'vk_swiftshader.dll', 'vk_swiftshader_icd.json',
+                'vulkan-1.dll', 'dxcompiler.dll', 'dxil.dll']
+    optional = ['chrome_100_percent.pak', 'chrome_200_percent.pak',
+                'v8_context_snapshot.bin']
     missing = [f for f in required if not (out / f).exists()]
     if missing:
         raise RuntimeError('build output missing files: {}'.format(missing))
